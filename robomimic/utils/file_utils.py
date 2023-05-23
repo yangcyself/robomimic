@@ -310,6 +310,62 @@ def config_from_checkpoint(algo_name=None, ckpt_path=None, ckpt_dict=None, verbo
 
     return config, ckpt_dict
 
+def model_from_checkpoint(device=None, ckpt_path=None, ckpt_dict=None, verbose=False):
+    """
+    This function restores a trained policy from a checkpoint file or
+    loaded model dictionary.
+
+    Args:
+        device (torch.device): if provided, put model on this device
+
+        ckpt_path (str): Path to checkpoint file. Only needed if not providing @ckpt_dict.
+
+        ckpt_dict(dict): Loaded model checkpoint dictionary. Only needed if not providing @ckpt_path.
+
+        verbose (bool): if True, include print statements
+
+    Returns:
+        model (RolloutPolicy): instance of Algo that has the saved weights from
+            the checkpoint file, and also acts as a policy that can easily
+            interact with an environment in a training loop
+
+        ckpt_dict (dict): loaded checkpoint dictionary (convenient to avoid
+            re-loading checkpoint from disk multiple times)
+    """
+    ckpt_dict = maybe_dict_from_checkpoint(ckpt_path=ckpt_path, ckpt_dict=ckpt_dict)
+
+    # algo name and config from model dict
+    algo_name, _ = algo_name_from_checkpoint(ckpt_dict=ckpt_dict)
+    config, _ = config_from_checkpoint(algo_name=algo_name, ckpt_dict=ckpt_dict, verbose=verbose)
+
+    # read config to set up metadata for observation modalities (e.g. detecting rgb observations)
+    ObsUtils.initialize_obs_utils_with_config(config)
+
+    # shape meta from model dict to get info needed to create model
+    shape_meta = ckpt_dict["shape_metadata"]
+
+    # maybe restore observation normalization stats
+    obs_normalization_stats = ckpt_dict.get("obs_normalization_stats", None)
+    if obs_normalization_stats is not None:
+        assert config.train.hdf5_normalize_obs
+        for m in obs_normalization_stats:
+            for k in obs_normalization_stats[m]:
+                obs_normalization_stats[m][k] = np.array(obs_normalization_stats[m][k])
+
+    if device is None:
+        # get torch device
+        device = TorchUtils.get_torch_device(try_to_use_cuda=config.train.cuda)
+
+    # create model and load weights
+    model = algo_factory(
+        algo_name,
+        config,
+        obs_key_shapes=shape_meta["all_shapes"],
+        ac_dim=shape_meta["ac_dim"],
+        device=device,
+    )
+    model.deserialize(ckpt_dict["model"])
+    return model, ckpt_dict
 
 def policy_from_checkpoint(device=None, ckpt_path=None, ckpt_dict=None, verbose=False):
     """

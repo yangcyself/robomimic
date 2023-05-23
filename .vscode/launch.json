@@ -1,0 +1,29 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Train bc_rnn_r3m liftph",
+            "type": "python",
+            "request": "launch",
+            "args" : ["--config", "robomimic/exps/paper/core/lift/ph/image/bc_rnn_r3m.json", 
+                    "--dataset", "datasets/lift/ph/image.hdf5"
+            ],
+            "program": "${workspaceFolder}/robomimic/scripts/train.py",
+            "console": "integratedTerminal",
+            "env": {
+                "LD_LIBRARY_PATH":"$LD_LIBRARY_PATH:/home/chenyu/.mujoco/mujoco200/bin"
+            }
+        },
+    ]
+}

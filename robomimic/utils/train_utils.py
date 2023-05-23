@@ -77,6 +77,16 @@ def get_exp_dir(config, auto_remove_exp_dir=False):
     os.makedirs(video_dir)
     return log_dir, output_dir, video_dir
 
+def resume_exp_dir(base_output_dir):
+    
+    output_dir = os.path.join(base_output_dir, "models")
+    
+    # tensorboard directory
+    log_dir = os.path.join(base_output_dir, "logs")
+    
+    # video directory
+    video_dir = os.path.join(base_output_dir, "videos")
+    return log_dir, output_dir, video_dir
 
 def load_data_for_training(config, obs_keys):
     """

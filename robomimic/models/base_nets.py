@@ -15,6 +15,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import models as vision_models
+import torchvision.transforms as T
 
 import robomimic.utils.tensor_utils as TensorUtils
 import robomimic.utils.obs_utils as ObsUtils
@@ -498,6 +499,49 @@ class ResNet18Conv(ConvBase):
         """Pretty print network."""
         header = '{}'.format(str(self.__class__.__name__))
         return header + '(input_channel={}, input_coord_conv={})'.format(self._input_channel, self._input_coord_conv)
+
+
+class R3MConv(ConvBase):
+    """
+    A ResNet18 block that can be used to process input images.
+    """
+    def __init__(
+        self
+    ):
+        """
+        Args:
+            Use the r3m embedding as the visual backbone
+        """
+        super(R3MConv, self).__init__()
+        from r3m import load_r3m
+        self.r3m = load_r3m("resnet18") # resnet18, resnet34, resnet50
+        self.r3m.eval()
+
+        # cut the last fc layer
+        # self.nets = torch.nn.Sequential(*(list(net.children())[:-2]))
+    def forward(self, inputs):
+        # inputs = self.transform(inputs).reshape(-1, 3, 84, 84)
+        x = self.r3m(inputs*255.0)
+        return x
+
+    def output_shape(self, input_shape):
+        """
+        Function to compute output shape from inputs to this module. 
+
+        Args:
+            input_shape (iterable of int): shape of input. Does not include batch dimension.
+                Some modules may not need this argument, if their output does not depend 
+                on the size of the input, or if they assume fixed size input.
+
+        Returns:
+            out_shape ([int]): list of integers corresponding to output shape
+        """
+        return [512]
+
+    def __repr__(self):
+        """Pretty print network."""
+        header = '{}'.format(str(self.__class__.__name__))
+        return header 
 
 
 class CoordConv2d(nn.Conv2d, Module):
