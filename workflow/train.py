@@ -327,17 +327,15 @@ def train(config, device):
 def main(args):
     """Train a model on a task using a specified algorithm."""
     # load config
-    if args.task is not None:
-        # load config from json file
-        with open("workflow/cfgs/robomimic_bc_rnn.json") as f:
-            ext_cfg = json.load(f)
-            config = config_factory(ext_cfg["algo_name"])
-        # update config with external json - this will throw errors if
-        # the external config has keys not present in the base algo config
-        with config.values_unlocked():
-            config.update(ext_cfg)
-    else:
-        raise ValueError("Please provide a task name through CLI arguments.")
+    
+    # load config from json file
+    with open("workflow/cfgs/robomimic_bc_rnn.json") as f:
+        ext_cfg = json.load(f)
+        config = config_factory(ext_cfg["algo_name"])
+    # update config with external json - this will throw errors if
+    # the external config has keys not present in the base algo config
+    with config.values_unlocked():
+        config.update(ext_cfg)
 
     if args.dataset is not None:
         config.train.data = args.dataset
@@ -380,8 +378,6 @@ if __name__ == "__main__":
         help="(optional) if provided, override the dataset path defined in the config",
     )
 
-    parser.add_argument("--task", type=str, default=None, help="Name of the task.")
-    parser.add_argument("--algo", type=str, default=None, help="Name of the algorithm.")
-
     args = parser.parse_args()
+    args.task = "Isaac-Elevator-Franka-v0"
     main(args)
