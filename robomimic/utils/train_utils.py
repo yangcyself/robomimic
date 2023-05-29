@@ -54,10 +54,12 @@ def get_exp_dir(config, auto_remove_exp_dir=False):
         base_output_dir = os.path.join(robomimic.__path__[0], base_output_dir)
     base_output_dir = os.path.join(base_output_dir, config.experiment.name)
     if os.path.exists(base_output_dir):
-        if not auto_remove_exp_dir:
+        if auto_remove_exp_dir is None:
             ans = input("WARNING: model directory ({}) already exists! \noverwrite? (y/n)\n".format(base_output_dir))
-        else:
+        elif auto_remove_exp_dir:
             ans = "y"
+        else:
+            ans = "n"
         if ans == "y":
             print("REMOVING")
             shutil.rmtree(base_output_dir)
