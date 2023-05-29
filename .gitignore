@@ -120,5 +120,6 @@ venv.bak/
 *.mp4
 *.pth
 
-# models
+# trained models
 trained_models
+logs
