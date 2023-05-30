@@ -8,5 +8,5 @@
 #SBATCH -A es_hutter
 #SBATCH --gpus=1
 
-python workflow/train.py --dataset /cluster/scratch/chenyang/May29_00-07-25/hdf_dataset.hdf5
+python workflow/train.py --dataset /cluster/scratch/chenyang/May29_00-07-25/hdf_dataset.hdf5 "$@"
 
