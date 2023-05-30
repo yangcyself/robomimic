@@ -329,7 +329,7 @@ def main(args):
     # load config
     
     # load config from json file
-    with open("workflow/cfgs/robomimic_bc_rnn.json") as f:
+    with open(args.cfg) as f:
         ext_cfg = json.load(f)
         config = config_factory(ext_cfg["algo_name"])
     # update config with external json - this will throw errors if
@@ -376,6 +376,13 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="(optional) if provided, override the dataset path defined in the config",
+    )
+
+    parser.add_argument(
+        "--cfg",
+        type=str,
+        default=None,
+        help="The config file",
     )
 
     args = parser.parse_args()
