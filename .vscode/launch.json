@@ -25,5 +25,18 @@
                 "LD_LIBRARY_PATH":"$LD_LIBRARY_PATH:/home/chenyu/.mujoco/mujoco200/bin"
             }
         },
+        {
+            "name": "Train act liftph",
+            "type": "python",
+            "request": "launch",
+            "args" : ["--config", "robomimic/exps/templates/act.json", 
+                    "--dataset", "datasets/lift/ph/image.hdf5"
+            ],
+            "program": "${workspaceFolder}/robomimic/scripts/train.py",
+            "console": "integratedTerminal",
+            "env": {
+                "LD_LIBRARY_PATH":"$LD_LIBRARY_PATH:/home/chenyu/.mujoco/mujoco200/bin"
+            }
+        },
     ]
 }

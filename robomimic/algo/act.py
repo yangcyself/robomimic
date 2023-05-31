@@ -79,20 +79,8 @@ class ACT(PolicyAlgo):
         Creates networks and places them into @self.nets.
         """
 
-        # PolicyNets.ActorNetwork(
-        #     obs_shapes=self.obs_shapes,
-        #     goal_shapes=self.goal_shapes,
-        #     ac_dim=self.ac_dim,
-        #     mlp_layer_dims=self.algo_config.actor_layer_dims,
-        #     encoder_kwargs=ObsUtils.obs_encoder_kwargs_from_config(self.obs_config.encoder),
-        # )
-        # self.obs_shapes: ordered dict
-        # self.goal_shapes: ordered dict
-        # self.ac_dim 
-
         self.nets = nn.ModuleDict()
 
-        state_dim = 14 # TODO hardcode
         # From state
         # backbone = None # from state for now, no need for conv nets
         # From image
@@ -103,7 +91,8 @@ class ACT(PolicyAlgo):
             backbone,
             transformer,
             encoder,
-            state_dim=state_dim,
+            state_dim=9, # TODO: change it to using self.obs_shapes
+            action_dim=self.ac_dim,
             num_queries=self.algo_config.chunk_size,
             camera_names=self.algo_config.camera_names,
         )
@@ -130,9 +119,14 @@ class ACT(PolicyAlgo):
                 will be used for training 
         """
         input_batch = dict()
-        input_batch["obs"] = {k: batch["obs"][k][:, 0, :] for k in batch["obs"]}
-        input_batch["goal_obs"] = batch.get("goal_obs", None) # goals may not be present
-        input_batch["actions"] = batch["actions"][:, 0, :]
+        input_batch["obs"] = dict()
+        input_batch["obs"]["image"] = batch["obs"][self.algo_config.camera_names[0]][:,0,None,...]
+        eef_pos = batch["obs"]["robot0_eef_pos"][:,0,...]
+        eef_quat = batch["obs"]["robot0_eef_quat"][:,0,...]
+        gripper_qpos = batch["obs"]["robot0_gripper_qpos"][:,0,...]
+        input_batch["obs"]["low_dim"] = torch.cat([eef_pos, eef_quat, gripper_qpos], dim = -1)
+        input_batch["actions"] = batch["actions"] # batch_size, seq_length, 7
+        input_batch["is_pad"] = torch.zeros(batch["actions"].shape[:2]) # TODO: augment is_pad into dataset
         return TensorUtils.to_device(TensorUtils.to_float(input_batch), self.device)
 
     def train_on_batch(self, batch, epoch, validate=False):
@@ -179,13 +173,13 @@ class ACT(PolicyAlgo):
         """
         image = batch["obs"]["image"]
         image = self.imgnormalize(image)
-        qpos = batch["obs"]["qpos"]
+        qpos = batch["obs"]["low_dim"]
         actions = batch["actions"]
-        is_pad = batch["is_pad"]
+        is_pad = batch["is_pad"].to(dtype=torch.bool)
         actions = actions[:, :self.nets["policy"].num_queries]
         is_pad = is_pad[:, :self.nets["policy"].num_queries]
 
-        a_hat, is_pad_hat, (mu, logvar) = self.nets["policy"](qpos, image, env_state, actions, is_pad)
+        a_hat, is_pad_hat, (mu, logvar) = self.nets["policy"](qpos, image, None, actions, is_pad)
         predictions = OrderedDict(
             a_hat=a_hat,
             is_pad_hat=is_pad_hat,
@@ -213,11 +207,11 @@ class ACT(PolicyAlgo):
 
         actions = batch["actions"]
         actions = actions[:, :self.nets["policy"].num_queries]
-        is_pad = batch["is_pad"]
+        is_pad = batch["is_pad"].to(dtype=torch.bool)
         is_pad = is_pad[:, :self.nets["policy"].num_queries]
 
         loss_dict = dict()
-        all_l1 = F.l1_loss(actions, a_hat, reduction='none')
+        all_l1 = F.l1_loss(actions, predictions['a_hat'], reduction='none')
         l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
         loss_dict['l1'] = l1
         loss_dict['kl'] = total_kld[0]
