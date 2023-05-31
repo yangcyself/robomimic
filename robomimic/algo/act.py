@@ -271,9 +271,13 @@ class ACT(PolicyAlgo):
         """
         assert not self.nets.training
 
-        image = batch["obs"]["image"]
+        image = obs_dict[self.algo_config.camera_names[0]][:,None,...]
         image = self.imgnormalize(image)
-        qpos = batch["obs"]["qpos"]
-        a_hat = self.nets["policy"](qpos, image, None) # no action, sample from prior
-        return a_hat
+        eef_pos = obs_dict["robot0_eef_pos"]
+        eef_quat = obs_dict["robot0_eef_quat"]
+        gripper_qpos = obs_dict["robot0_gripper_qpos"]
+        qpos = torch.cat([eef_pos, eef_quat, gripper_qpos], dim = -1)
+
+        a_hat,_,_ = self.nets["policy"](qpos, image, None) # no action, sample from prior
+        return a_hat[:,0,:] # TODO, average chunk this
 
