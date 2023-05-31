@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import robomimic.models.base_nets as BaseNets
 import robomimic.models.obs_nets as ObsNets
 from robomimic.models.policy_nets import DETRVAEActor
+from robomimic.models.backbone import build_backbone
 from robomimic.models.transformer import build_transformer, TransformerEncoder, TransformerEncoderLayer
 import robomimic.models.vae_nets as VAENets
 import robomimic.utils.loss_utils as LossUtils
@@ -84,22 +85,26 @@ class ACT(PolicyAlgo):
         #     mlp_layer_dims=self.algo_config.actor_layer_dims,
         #     encoder_kwargs=ObsUtils.obs_encoder_kwargs_from_config(self.obs_config.encoder),
         # )
+        # self.obs_shapes: ordered dict
+        # self.goal_shapes: ordered dict
+        # self.ac_dim 
+
         self.nets = nn.ModuleDict()
 
         state_dim = 14 # TODO hardcode
         # From state
         # backbone = None # from state for now, no need for conv nets
         # From image
-        backbone = build_backbone(args)
-        transformer = build_transformer(args)
-        encoder = build_encoder(args)
+        backbone = build_backbone(self.algo_config.backbone)
+        transformer = build_transformer(self.algo_config.transformer)
+        encoder = build_encoder(self.algo_config.encoder)
         model = DETRVAEActor(
             backbone,
             transformer,
             encoder,
             state_dim=state_dim,
-            num_queries=args.num_queries,
-            camera_names=args.camera_names,
+            num_queries=self.algo_config.chunk_size,
+            camera_names=self.algo_config.camera_names,
         )
 
         n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -215,7 +220,7 @@ class ACT(PolicyAlgo):
         l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
         loss_dict['l1'] = l1
         loss_dict['kl'] = total_kld[0]
-        loss_dict['loss'] = loss_dict['l1'] + loss_dict['kl'] * self.algo_config.kl_weight
+        loss_dict['loss'] = loss_dict['l1'] + loss_dict['kl'] * self.algo_config.loss.kl_weight
         return loss_dict
 
     def _train_step(self, losses):
