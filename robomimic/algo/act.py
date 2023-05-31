@@ -19,6 +19,7 @@ import robomimic.utils.torch_utils as TorchUtils
 import robomimic.utils.obs_utils as ObsUtils
 
 from robomimic.algo import register_algo_factory_func, PolicyAlgo
+import torchvision.transforms as transforms
 
 
 @register_algo_factory_func("act")

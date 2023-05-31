@@ -35,9 +35,9 @@
     },
     "train": {
         "data": null,
-        "output_dir": "../bc_trained_models",
+        "output_dir": "../trained_models/act_trained_models",
         "num_data_workers": 0,
-        "hdf5_cache_mode": "all",
+        "hdf5_cache_mode": "low_dim",
         "hdf5_use_swmr": true,
         "hdf5_normalize_obs": false,
         "hdf5_filter_key": null,
@@ -75,7 +75,8 @@
             "train_backbone" : false,
             "return_interm_layers": false,
             "backbone":"resnet18",
-            "dilation": false
+            "dilation": false,
+            "hidden_dim": 512
         },
         "transformer":{
             "hidden_dim": 512,
@@ -87,12 +88,12 @@
             "pre_norm": false
         },
         "encoder":{
-            "d_model" : 512,
+            "hidden_dim" : 512,
             "dropout" : 0.1,
-            "nhead" : 8,
+            "nheads" : 8,
             "dim_feedforward" : 2048,
-            "num_encoder_layers" : 4,
-            "normalize_before": false
+            "enc_layers" : 4,
+            "pre_norm": false
         }
     },
     "observation": {

@@ -5,9 +5,10 @@ Various positional encodings for the transformer.
 import math
 import torch
 from torch import nn
+from typing import Optional, List
 
 class NestedTensor(object):
-    def __init__(self, tensors, mask: Optional[Tensor]):
+    def __init__(self, tensors, mask: Optional[torch.Tensor]):
         self.tensors = tensors
         self.mask = mask
 
