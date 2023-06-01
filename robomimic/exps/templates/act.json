@@ -48,6 +48,7 @@
             "dones"
         ],
         "goal_mode": null,
+        "load_next_obs": false,
         "cuda": true,
         "batch_size": 128,
         "num_epochs": 2000,
