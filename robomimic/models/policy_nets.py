@@ -1230,10 +1230,10 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 
 class DETRVAEActor(Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbones, transformer, encoder, state_dim, action_dim, num_queries, camera_names):
+    def __init__(self, backbone, transformer, encoder, state_dim, action_dim, num_queries, camera_names):
         """ Initializes the model.
         Parameters:
-            backbones: torch module of the backbone to be used. See backbone.py
+            backbone: torch module of the backbone to be used. See backbone.py
             transformer: torch module of the transformer architecture. See transformer.py
             state_dim: robot state dimension of the environment
             action_dim: robot action dimension 
@@ -1250,16 +1250,16 @@ class DETRVAEActor(Module):
         self.action_head = nn.Linear(hidden_dim, action_dim)
         self.is_pad_head = nn.Linear(hidden_dim, 1)
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
-        if backbones is not None:
-            self.input_proj = nn.Conv2d(backbones.num_channels, hidden_dim, kernel_size=1)
-            self.backbones = backbones
+        if backbone is not None:
+            self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
+            self.backbone = backbone
             self.input_proj_robot_state = nn.Linear(state_dim, hidden_dim)
         else:
             # input_dim = 14 + 7 # robot_state + env_state
             self.input_proj_robot_state = nn.Linear(state_dim, hidden_dim)
             self.input_proj_env_state = nn.Linear(7, hidden_dim)
             self.pos = torch.nn.Embedding(2, hidden_dim)
-            self.backbones = None
+            self.backbone = None
 
         # encoder extra parameters
         self.latent_dim = 32 # final size of latent z # TODO tune
@@ -1311,12 +1311,12 @@ class DETRVAEActor(Module):
             latent_sample = torch.zeros([bs, self.latent_dim], dtype=torch.float32).to(qpos.device)
             latent_input = self.latent_out_proj(latent_sample)
 
-        if self.backbones is not None:
+        if self.backbone is not None:
             # Image observation features and position embeddings
             all_cam_features = []
             all_cam_pos = []
             for cam_id, cam_name in enumerate(self.camera_names):
-                features, pos = self.backbones(image[:, cam_id]) # HARDCODED
+                features, pos = self.backbone(image[:, cam_id]) # HARDCODED
                 features = features[0] # take the last layer feature
                 pos = pos[0]
                 all_cam_features.append(self.input_proj(features))

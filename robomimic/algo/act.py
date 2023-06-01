@@ -120,7 +120,8 @@ class ACT(PolicyAlgo):
         """
         input_batch = dict()
         input_batch["obs"] = dict()
-        input_batch["obs"]["image"] = batch["obs"][self.algo_config.camera_names[0]][:,0,None,...]
+        images = [batch["obs"][c][:,0,None,...] for c in self.algo_config.camera_names]
+        input_batch["obs"]["image"] = torch.cat(images, dim=1) # batch num_cam, 
         eef_pos = batch["obs"]["robot0_eef_pos"][:,0,...]
         eef_quat = batch["obs"]["robot0_eef_quat"][:,0,...]
         gripper_qpos = batch["obs"]["robot0_gripper_qpos"][:,0,...]
