@@ -8,5 +8,5 @@
 #SBATCH -A es_hutter
 #SBATCH --gpus=1
 
-python workflow/train.py --logdir_prefix /cluster/home/chenyang "$@"
+python workflow/train.py --logdir_prefix /cluster/scratch/chenyang "$@"
 
