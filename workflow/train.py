@@ -344,7 +344,8 @@ def main(args):
         config.experiment.name = args.name
 
     # change location of experiment directory
-    config.train.output_dir = os.path.abspath(os.path.join("./logs/robomimic", args.task))
+    config.train.output_dir = os.path.abspath(os.path.join(
+        args.logdir_prefix, "logs/robomimic", args.task))
     # get torch device
     device = TorchUtils.get_torch_device(try_to_use_cuda=config.train.cuda)
 
@@ -383,6 +384,13 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="The config file",
+    )
+
+    parser.add_argument(
+        "--logdir_prefix",
+        type=str,
+        default=".",
+        help="The prefix of the log directory",
     )
 
     args = parser.parse_args()
