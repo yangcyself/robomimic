@@ -127,7 +127,7 @@ class ACT(PolicyAlgo):
         gripper_qpos = batch["obs"]["robot0_gripper_qpos"][:,0,...]
         input_batch["obs"]["low_dim"] = torch.cat([eef_pos, eef_quat, gripper_qpos], dim = -1)
         input_batch["actions"] = batch["actions"] # batch_size, seq_length, 7
-        input_batch["is_pad"] = torch.zeros(batch["actions"].shape[:2]) # TODO: augment is_pad into dataset
+        input_batch["is_pad"] = ~batch["pad_mask"][:,:,0]
         return TensorUtils.to_device(TensorUtils.to_float(input_batch), self.device)
 
     def train_on_batch(self, batch, epoch, validate=False):
@@ -173,7 +173,7 @@ class ACT(PolicyAlgo):
             predictions (dict): dictionary containing network outputs
         """
         image = batch["obs"]["image"]
-        image = self.imgnormalize(image)
+        # image = self.imgnormalize(image)
         qpos = batch["obs"]["low_dim"]
         actions = batch["actions"]
         is_pad = batch["is_pad"].to(dtype=torch.bool)
@@ -272,13 +272,14 @@ class ACT(PolicyAlgo):
         """
         assert not self.nets.training
 
-        image = obs_dict[self.algo_config.camera_names[0]][:,None,...]
-        image = self.imgnormalize(image)
+        images = [obs_dict[c][:,None,...] for c in self.algo_config.camera_names]
+        images = torch.cat(images, dim=1) # batch num_cam, 
+        # image = self.imgnormalize(image)
         eef_pos = obs_dict["robot0_eef_pos"]
         eef_quat = obs_dict["robot0_eef_quat"]
         gripper_qpos = obs_dict["robot0_gripper_qpos"]
         qpos = torch.cat([eef_pos, eef_quat, gripper_qpos], dim = -1)
 
-        a_hat,_,_ = self.nets["policy"](qpos, image, None) # no action, sample from prior
+        a_hat,_,_ = self.nets["policy"](qpos, images, None) # no action, sample from prior
         return a_hat[:,0,:] # TODO, average chunk this
 

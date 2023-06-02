@@ -161,8 +161,20 @@ class BaseConfig(Config):
         # of the full dataset. This provides a convenient way to train on only a subset of the trajectories in a dataset.
         self.train.hdf5_filter_key = None
 
+        # dataset parameter: numbers of stacked frames to fetch. Defaults to 1 (single frame).
+        self.train.frame_stack = 1
+
         # length of experience sequence to fetch from the dataset
         self.train.seq_length = 1
+
+        # dataset parameter: whether to pad sequence for frame stacking at the beginning of a demo
+        self.train.pad_frame_stack = True
+
+        # dataset parameter: pad last obs per trajectory to ensure all sequences are sampled
+        self.train.pad_seq_length = True
+
+        # dataset parameter: If True, also provide padding masks as part of the batch
+        self.train.get_pad_mask = False
 
         # keys from hdf5 to load into each batch, besides "obs" and "next_obs". If algorithms
         # require additional keys from each trajectory in the hdf5, they should be specified here.

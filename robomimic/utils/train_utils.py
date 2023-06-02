@@ -151,11 +151,11 @@ def dataset_factory(config, obs_keys, filter_by_attribute=None, dataset_path=Non
         obs_keys=obs_keys,
         dataset_keys=config.train.dataset_keys,
         load_next_obs=True, # make sure dataset returns s'
-        frame_stack=1, # no frame stacking
+        frame_stack=config.train.frame_stack, # no frame stacking
         seq_length=config.train.seq_length,
-        pad_frame_stack=True,
-        pad_seq_length=True, # pad last obs per trajectory to ensure all sequences are sampled
-        get_pad_mask=False,
+        pad_frame_stack=config.train.pad_frame_stack,
+        pad_seq_length=config.train.pad_seq_length, # pad last obs per trajectory to ensure all sequences are sampled
+        get_pad_mask=config.train.get_pad_mask,
         goal_mode=config.train.goal_mode,
         hdf5_cache_mode=config.train.hdf5_cache_mode,
         hdf5_use_swmr=config.train.hdf5_use_swmr,

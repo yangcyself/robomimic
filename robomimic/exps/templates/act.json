@@ -28,7 +28,7 @@
             "enabled": true,
             "n": 50,
             "horizon": 400,
-            "rate": 50,
+            "rate": 20,
             "warmstart": 0,
             "terminate_on_success": true
         }
@@ -48,6 +48,7 @@
             "dones"
         ],
         "goal_mode": null,
+        "get_pad_mask": true,
         "cuda": true,
         "batch_size": 16,
         "num_epochs": 600,
