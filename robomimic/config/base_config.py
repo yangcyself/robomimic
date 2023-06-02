@@ -187,6 +187,8 @@ class BaseConfig(Config):
         # one of [None, "last"] - set to "last" to include goal observations in each batch
         self.train.goal_mode = None
 
+        # whether to load next_obs from the dataset
+        self.train.load_next_obs = True
 
         ## learning config ##
         self.train.cuda = True          # use GPU or not
