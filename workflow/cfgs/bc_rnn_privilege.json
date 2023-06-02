@@ -1,5 +1,5 @@
 {
-    "algo_name": "bc_rnn",
+    "algo_name": "bc",
     "experiment": {
         "name": "bc_rnn_privilege",
         "validate": true,
