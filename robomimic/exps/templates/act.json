@@ -16,8 +16,8 @@
             "on_best_rollout_return": false,
             "on_best_rollout_success_rate": true
         },
-        "epoch_every_n_steps": null, 
-        "validation_epoch_every_n_steps": 100,
+        "epoch_every_n_steps": 100,
+        "validation_epoch_every_n_steps": 10,
         "env": null,
         "additional_envs": null,
         "render": false,
@@ -49,9 +49,8 @@
         ],
         "goal_mode": null,
         "get_pad_mask": true,
-        "load_next_obs": false,
         "cuda": true,
-        "batch_size": 16,
+        "batch_size": 64,
         "num_epochs": 600,
         "seed": 1
     },
@@ -59,8 +58,8 @@
         "optim_params": {
             "policy": {
                 "learning_rate": {
-                    "initial": 1e-5,
-                    "decay_factor": 1e-1,
+                    "initial": 1e-4,
+                    "decay_factor": 1e-2,
                     "epoch_schedule": []
                 },
                 "regularization": {
@@ -84,16 +83,16 @@
             "hidden_dim": 512,
             "dropout": 0.1, 
             "nheads" : 8,
-            "dim_feedforward": 3200,
+            "dim_feedforward": 2048,
             "enc_layers": 4,
-            "dec_layers": 7,
+            "dec_layers": 6,
             "pre_norm": false
         },
         "encoder":{
             "hidden_dim" : 512,
             "dropout" : 0.1,
             "nheads" : 8,
-            "dim_feedforward" : 3200,
+            "dim_feedforward" : 2048,
             "enc_layers" : 4,
             "pre_norm": false
         }
