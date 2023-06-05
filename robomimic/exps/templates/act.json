@@ -99,126 +99,83 @@
         }
     },
     "observation": {
-        "modalities": {
-            "obs": {
-                "low_dim": [
-                    "robot0_eef_pos",
-                    "robot0_eef_quat",
-                    "robot0_gripper_qpos"
-                ],
-                "rgb": [
-                    "agentview_image",
-                    "robot0_eye_in_hand_image"
-                ],
-                "depth": [],
-                "scan": []
+        "action_encoder":{
+            "modalities": {
+                "obs": {
+                    "low_dim": [
+                        "robot0_eef_pos",
+                        "robot0_eef_quat",
+                        "robot0_gripper_qpos"
+                    ],
+                    "rgb": [],
+                    "depth": [],
+                    "scan": []
+                }
             },
-            "goal": {
-                "low_dim": [],
-                "rgb": [],
-                "depth": [],
-                "scan": []
+            "encoder": {
+                "low_dim": {
+                    "core_class": null,
+                    "core_kwargs": {},
+                    "obs_randomizer_class": null,
+                    "obs_randomizer_kwargs": {}
+                }
             }
         },
-        "encoder": {
-            "low_dim": {
-                "core_class": null,
-                "core_kwargs": {},
-                "obs_randomizer_class": null,
-                "obs_randomizer_kwargs": {}
-            },
-            "rgb": {
-                "core_class": "VisualCore",
-                "core_kwargs": {
-                    "feature_dimension": 64,
-                    "flatten": true,
-                    "backbone_class": "ResNet18Conv",
-                    "backbone_kwargs": {
-                        "pretrained": false,
-                        "input_coord_conv": false
-                    },
-                    "pool_class": "SpatialSoftmax",
-                    "pool_kwargs": {
-                        "num_kp": 32,
-                        "learnable_temperature": false,
-                        "temperature": 1.0,
-                        "noise_std": 0.0,
-                        "output_variance": false
-                    }
+        "actor":{
+            "modalities": {
+                "obs": {
+                    "low_dim": [
+                        "robot0_eef_pos",
+                        "robot0_eef_quat",
+                        "robot0_gripper_qpos"
+                    ],
+                    "rgb": [
+                        "agentview_image",
+                        "robot0_eye_in_hand_image"
+                    ],
+                    "depth": [],
+                    "scan": []
                 },
-                "obs_randomizer_class": null,
-                "obs_randomizer_kwargs": {
-                    "crop_height": 76,
-                    "crop_width": 76,
-                    "num_crops": 1,
-                    "pos_enc": false
+                "goal": {
+                    "low_dim": [],
+                    "rgb": [],
+                    "depth": [],
+                    "scan": []
                 }
             },
-            "depth": {
-                "core_class": "VisualCore",
-                "core_kwargs": {
-                    "feature_dimension": 64,
-                    "flatten": true,
-                    "backbone_class": "ResNet18Conv",
-                    "backbone_kwargs": {
-                        "pretrained": false,
-                        "input_coord_conv": false
-                    },
-                    "pool_class": "SpatialSoftmax",
-                    "pool_kwargs": {
-                        "num_kp": 32,
-                        "learnable_temperature": false,
-                        "temperature": 1.0,
-                        "noise_std": 0.0,
-                        "output_variance": false
-                    }
+            "encoder": {
+                "low_dim": {
+                    "core_class": null,
+                    "core_kwargs": {},
+                    "obs_randomizer_class": null,
+                    "obs_randomizer_kwargs": {}
                 },
-                "obs_randomizer_class": null,
-                "obs_randomizer_kwargs": {
-                    "crop_height": 76,
-                    "crop_width": 76,
-                    "num_crops": 1,
-                    "pos_enc": false
-                }
-            },
-            "scan": {
-                "core_class": "ScanCore",
-                "core_kwargs": {
-                    "feature_dimension": 64,
-                    "flatten": true,
-                    "pool_class": "SpatialSoftmax",
-                    "pool_kwargs": {
-                        "num_kp": 32,
-                        "learnable_temperature": false,
-                        "temperature": 1.0,
-                        "noise_std": 0.0,
-                        "output_variance": false
+                "rgb": {
+                    "core_class": "VisualCore",
+                    "core_kwargs": {
+                        "feature_dimension": 64,
+                        "flatten": true,
+                        "backbone_class": "ResNet18Conv",
+                        "backbone_kwargs": {
+                            "pretrained": false,
+                            "input_coord_conv": false
+                        },
+                        "pool_class": "SpatialSoftmax",
+                        "pool_kwargs": {
+                            "num_kp": 32,
+                            "learnable_temperature": false,
+                            "temperature": 1.0,
+                            "noise_std": 0.0,
+                            "output_variance": false
+                        }
                     },
-                    "conv_activation": "relu",
-                    "conv_kwargs": {
-                        "out_channels": [
-                            32,
-                            64,
-                            64
-                        ],
-                        "kernel_size": [
-                            8,
-                            4,
-                            2
-                        ],
-                        "stride": [
-                            4,
-                            2,
-                            1
-                        ]
+                    "obs_randomizer_class": null,
+                    "obs_randomizer_kwargs": {
+                        "crop_height": 76,
+                        "crop_width": 76,
+                        "num_crops": 1,
+                        "pos_enc": false
                     }
-                },
-                "obs_randomizer_class": null,
-                "obs_randomizer_kwargs": {
-                    "crop_height": 76,
-                    "crop_width": 76,
-                    "num_crops": 1,
-                    "pos_enc": false
                 }
             }
         }

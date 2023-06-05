@@ -2,6 +2,7 @@
 Implementation of ACT: Action Chunking with Transformers
 """
 from collections import OrderedDict
+from copy import deepcopy
 
 import torch
 import torch.nn as nn
@@ -74,6 +75,50 @@ class ACT(PolicyAlgo):
     """
     Normal ACT training.
     """
+
+    def __init__(
+        self,
+        algo_config,
+        obs_config,
+        global_config,
+        obs_key_shapes,
+        ac_dim,
+        device
+    ):
+        """
+        Args:
+            algo_config (Config object): instance of Config corresponding to the algo section
+                of the config
+
+            obs_config (Config object): instance of Config corresponding to the observation
+                section of the config
+
+            global_config (Config object): global training config
+
+            obs_key_shapes (OrderedDict): dictionary that maps observation keys to shapes
+
+            ac_dim (int): dimension of action space
+
+            device (torch.Device): where the algo should live (i.e. cpu, gpu)
+        """
+        self.optim_params = deepcopy(algo_config.optim_params)
+        self.algo_config = algo_config
+        self.obs_config = obs_config
+        self.global_config = global_config
+
+        self.ac_dim = ac_dim
+        self.device = device
+        self.obs_key_shapes = obs_key_shapes
+
+        self.nets = nn.ModuleDict()
+        # TODO: consider if self.obs_shapes are needed
+        # self._create_shapes(obs_config.modalities, obs_key_shapes)
+        self._create_networks()
+        self._create_optimizers()
+        assert isinstance(self.nets, nn.ModuleDict)
+
+
+
     def _create_networks(self):
         """
         Creates networks and places them into @self.nets.

@@ -3,6 +3,7 @@ Config for BC algorithm.
 """
 
 from robomimic.config.base_config import BaseConfig
+from robomimic.config.bc_config import BCConfig
 
 
 class ACTConfig(BaseConfig):
@@ -53,4 +54,37 @@ class ACTConfig(BaseConfig):
         self.algo.encoder.dim_feedforward = 2048
         self.algo.encoder.enc_layers = 4
         self.algo.encoder.pre_norm = False
+
+    def observation_config(self):
+        """
+        Update from superclass so that value planner and actor each get their own obs config.
+        """
+        self.observation.action_encoder = BCConfig().observation
+        self.observation.actor = BCConfig().observation
+
+
+    @property
+    def all_obs_keys(self):
+        """
+        Update from superclass to include modalities from value planner and actor.
+        """
+        # pool all modalities
+        return sorted(tuple(set([
+            obs_key for group in [
+                self.observation.action_encoder.modalities.obs.values(),
+                self.observation.actor.modalities.obs.values(),
+            ]
+            for modality in group
+            for obs_key in modality
+        ])))
+
+
+    @property
+    def use_goals(self):
+        """
+        Update from superclass - value planner goal modalities determine goal-conditioning.
+        """
+        return len(
+            self.observation.actor.modalities.goal.low_dim +
+            self.observation.actor.modalities.goal.rgb) > 0
 
