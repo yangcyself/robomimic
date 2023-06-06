@@ -345,8 +345,6 @@ class ACT(ActionChunkingAlgo):
         """
         assert not self.nets.training
 
-        images = [obs_dict[c][:,None,...] for c in self.algo_config.camera_names]
-        images = torch.cat(images, dim=1) # batch num_cam, 
         # image = self.imgnormalize(image)
         eef_pos = obs_dict["robot0_eef_pos"]
         eef_quat = obs_dict["robot0_eef_quat"]

@@ -1176,6 +1176,7 @@ class MIMO_TRANSFORMER(Module):
         msg += textwrap.indent("\n\ntransformerEncoder={}".format(self.nets["transformerEncoder"]), indent)
         msg += textwrap.indent("\n\ntransformerDecoder={}".format(self.nets["transformerDecoder"]), indent)
         msg += textwrap.indent("\n\nhat_action={}".format(self.nets["hat_action"]), indent)
+        msg += textwrap.indent("\n\nhat_is_pad{}".format(self.nets["hat_is_pad"]), indent)
         msg = header + '(' + msg + '\n)'
         return msg
 
