@@ -28,6 +28,7 @@ from robomimic.models.base_nets import Module, Sequential, MLP, RNN_Base, ResNet
 def obs_encoder_factory(
         obs_shapes,
         feature_activation=nn.ReLU,
+        flatten_begin_axis = 1,
         encoder_kwargs=None,
     ):
     """
@@ -39,6 +40,8 @@ def obs_encoder_factory(
 
         feature_activation: non-linearity to apply after each obs net - defaults to ReLU. Pass
             None to apply no activation.
+
+        flatten_begin_axis (int): axis to begin flattening observations from. Defaults to 1
 
         encoder_kwargs (dict or None): If None, results in default encoder_kwargs being applied. Otherwise, should be
             nested dictionary containing relevant per-modality information for encoder networks.
@@ -57,7 +60,7 @@ def obs_encoder_factory(
             obs_modality2: dict
                 ...
     """
-    enc = ObservationEncoder(feature_activation=feature_activation)
+    enc = ObservationEncoder(feature_activation=feature_activation, flatten_begin_axis=flatten_begin_axis)
     for k, obs_shape in obs_shapes.items():
         obs_modality = ObsUtils.OBS_KEYS_TO_MODALITIES[k]
         enc_kwargs = deepcopy(ObsUtils.DEFAULT_ENCODER_KWARGS[obs_modality]) if encoder_kwargs is None else \
@@ -101,11 +104,13 @@ class ObservationEncoder(Module):
     Call @register_obs_key to register observation keys with the encoder and then
     finally call @make to create the encoder networks. 
     """
-    def __init__(self, feature_activation=nn.ReLU):
+    def __init__(self, feature_activation=nn.ReLU, flatten_begin_axis = 1):
         """
         Args:
             feature_activation: non-linearity to apply after each obs net - defaults to ReLU. Pass
                 None to apply no activation. 
+            flatten_begin_axis (int): axis to begin flattening at. Defaults to 1, which is the
+                batch dimension. Can be set to 2 if the first two dims are batch and sequence.
         """
         super(ObservationEncoder, self).__init__()
         self.obs_shapes = OrderedDict()
@@ -115,6 +120,7 @@ class ObservationEncoder(Module):
         self.obs_nets = nn.ModuleDict()
         self.obs_randomizers = nn.ModuleDict()
         self.feature_activation = feature_activation
+        self.flatten_begin_axis = flatten_begin_axis
         self._locked = False
 
     def register_obs_key(
@@ -237,7 +243,7 @@ class ObservationEncoder(Module):
             if self.obs_randomizers[k] is not None:
                 x = self.obs_randomizers[k].forward_out(x)
             # flatten to [B, D]
-            x = TensorUtils.flatten(x, begin_axis=1)
+            x = TensorUtils.flatten(x, begin_axis=self.flatten_begin_axis)
             feats.append(x)
 
         # concatenate all features together
@@ -851,3 +857,325 @@ class RNN_MIMO_MLP(Module):
         msg += textwrap.indent("\n\nrnn={}".format(self.nets["rnn"]), indent)
         msg = header + '(' + msg + '\n)'
         return msg
+
+
+# Start of Transformer code
+
+from robomimic.models.transformer import TransformerEncoder, TransformerEncoderLayer, TransformerDecoder, TransformerDecoderLayer
+from robomimic.models.backbone import build_backbone
+
+class ObservationGroupEmbedder(Module):
+    """
+    This class allows networks to encode multiple observation dictionaries into a
+    set of embeddings of size d_model. Linear transformation is applied to the encodings
+    from obs_encoder to get the final embedding of d_model.
+
+    The class takes a dictionary of dictionaries, @observation_group_shapes.
+    Each key corresponds to a observation group (e.g. 'joints', 'cams', 'goal')
+    and each OrderedDict should be a map between modalities and 
+    expected input shapes (e.g. { 'image' : (3, 120, 160) }).
+    """
+    def __init__(
+        self,
+        observation_group_shapes,
+        d_model=512,
+        backbone_kwargs=None,
+        encoder_kwargs=None
+    ):
+        """
+        Args:
+            observation_group_shapes (OrderedDict): a dictionary of dictionaries.
+                Each key in this dictionary should specify an observation group, and
+                the value should be an OrderedDict that maps modalities to
+                expected shapes.
+
+            encoder_kwargs (dict or None): If None, results in default encoder_kwargs being applied. Otherwise, should
+                be nested dictionary containing relevant per-modality information for encoder networks.
+                Should be of form:
+
+                obs_modality1: dict
+                    feature_dimension: int
+                    core_class: str
+                    core_kwargs: dict
+                        ...
+                        ...
+                    obs_randomizer_class: str
+                    obs_randomizer_kwargs: dict
+                        ...
+                        ...
+                obs_modality2: dict
+                    ...
+        TODO: Handle the calculation of mask
+        """
+        super(ObservationGroupEmbedder, self).__init__()
+
+        # type checking
+        assert isinstance(observation_group_shapes, OrderedDict)
+        assert np.all([isinstance(observation_group_shapes[k], OrderedDict) for k in observation_group_shapes])
+        
+        self.observation_group_shapes = observation_group_shapes
+
+        # create an observation encoder per observation group
+        self.nets = nn.ModuleDict()
+
+        ## Manually create observation encoders for each observation group
+        ## TODO: 
+        # for obs_group in self.observation_group_shapes:
+        #     self.nets[obs_group] = obs_encoder_factory(
+        #         obs_shapes=self.observation_group_shapes[obs_group],
+        #         feature_activation=feature_activation,
+        #         encoder_kwargs=encoder_kwargs,
+        #     )
+
+        self.low_dim_obs = ['latent', 'joints']
+        for obs_group in self.low_dim_obs:
+            self.nets[obs_group] = obs_encoder_factory(
+                obs_shapes=self.observation_group_shapes[obs_group],
+                feature_activation=None,
+                flatten_begin_axis = 1, # batch
+                encoder_kwargs=encoder_kwargs,
+            )
+            self.nets[obs_group + "_proj"] = nn.Linear(self.nets[obs_group].output_shape()[0], d_model)
+
+        self.low_dim_pos_embed = nn.Embedding(len(self.low_dim_obs), d_model) # learned position embedding for proprio and latent
+
+        self.camera_names = observation_group_shapes["cams"].keys()
+        # TODO: Implant backbone into ObservationEncoder
+        backbone = build_backbone(backbone_kwargs)
+        self.nets["cams"] = backbone
+        self.nets["cams_proj"] = nn.Conv2d(backbone.num_channels, d_model, kernel_size=1)
+
+    def forward(self, **inputs):
+        """
+        Process each set of inputs in its own observation group.
+
+        Args:
+            inputs (dict): dictionary that maps observation groups to observation
+                dictionaries of torch.Tensor batches that agree with 
+                @self.observation_group_shapes. All observation groups in
+                @self.observation_group_shapes must be present, but additional
+                observation groups can also be present. Note that these are specified
+                as kwargs for ease of use with networks that name each observation
+                stream in their forward calls.
+
+        Returns:
+            outputs (torch.Tensor): flat outputs of shape [B, D]
+        """
+
+        # ensure all observation groups we need are present
+        assert set(self.observation_group_shapes.keys()).issubset(inputs), "{} does not contain all observation groups {}".format(
+            list(inputs.keys()), list(self.observation_group_shapes.keys())
+        )
+
+        all_cam_features = []
+        all_cam_pos = []
+        for img in inputs["cams"].values():
+            features, pos = self.nets["cams"](img)
+            features = features[0] # take the last layer feature
+            pos = pos[0]
+            all_cam_features.append(self.nets["cams_proj"](features))
+            all_cam_pos.append(pos)
+        # fold camera dimension into width dimension
+        src = torch.cat(all_cam_features, axis=3)
+        pos = torch.cat(all_cam_pos, axis=3)
+
+        # flatten NxCxHxW to NxHWxC
+        bs, c, h, w = src.shape
+        src = src.flatten(2).permute(0, 2, 1)
+        pos_embed = pos.flatten(2).permute(0, 2, 1).repeat(bs, 1, 1)
+
+        lowdim_inputs = [
+            self.nets[f"{k}_proj"].forward(
+                self.nets[k].forward(inputs[k])
+            )
+            for k in self.low_dim_obs
+        ]
+
+        lowdim_input = torch.stack(lowdim_inputs, axis=1)
+        lowdim_pos_embed = self.low_dim_pos_embed.weight.unsqueeze(0).repeat(bs, 1, 1)
+
+        src = torch.cat([lowdim_input, src], axis=1) # bs, seq, dim
+        pos_embed = torch.cat([lowdim_pos_embed, pos_embed], axis=1) # bs, seq, dim
+
+        return src, pos_embed
+
+    def output_shape(self):
+        """
+        Compute the output shape of this encoder.
+        """
+        feat_dim = 0
+        for obs_group in self.observation_group_shapes:
+            # get feature dimension of these keys
+            feat_dim += self.nets[obs_group].output_shape()[0]
+        return [feat_dim]
+
+    def __repr__(self):
+        """Pretty print network."""
+        header = '{}'.format(str(self.__class__.__name__))
+        msg = ''
+        for k in self.observation_group_shapes:
+            msg += '\n'
+            indent = ' ' * 4
+            msg += textwrap.indent("group={}\n{}".format(k, self.nets[k]), indent)
+        msg = header + '(' + msg + '\n)'
+        return msg
+
+
+class MIMO_TRANSFORMER(Module):
+    """
+    Extension to Transformer to accept multiple observation dictionaries as input and
+    to output dictionaries of tensors. Inputs are specified as a dictionary of 
+    observation dictionaries, with each key corresponding to an observation group.
+
+    This module utilizes @ObservationGroupEncoder to process the multiple input dictionaries and
+    @ObservationDecoder to generate tensor dictionaries. The default behavior
+    for encoding the inputs is to process visual inputs with a learned CNN and concatenating
+    the flat encodings with the other flat inputs. TODO: The default behavior for generating 
+    outputs is to use a linear layer branch to produce each modality separately
+    (including visual outputs).
+
+    This module contains a TransformerEncoder and TransformerDecoder.
+    """
+
+    def __init__(self, 
+        input_obs_group_shapes, 
+        output_shapes,
+        d_model=512, nhead=8, 
+        num_encoder_layers=6,
+        num_decoder_layers=6, 
+        dim_feedforward=2048, 
+        dropout=0.1,
+        activation="relu", 
+        normalize_before=False,
+        return_intermediate_dec=False,
+        backbone_kwargs=None,
+        encoder_kwargs=None
+    ):
+        """
+        Args:
+            input_obs_group_shapes (OrderedDict): a dictionary of dictionaries.
+                Each key in this dictionary should specify an observation group, and
+                the value should be an OrderedDict that maps modalities to
+                expected shapes.
+
+            output_shapes (OrderedDict): a dictionary of tuples (int, dict).
+                The int specifies the length of the predicted sequence.
+                The dict specifies each output shape.
+
+            nhead (int): the number of heads in the multiheadattention models
+
+            num_encoder_layers (int): the number of sub-encoder-layers in the encoder
+
+            num_decoder_layers (int): the number of sub-decoder-layers in the decoder
+
+            dim_feedforward (int): the dimension of the hidden layer in the MLP after decoder
+        """
+        super(MIMO_TRANSFORMER, self).__init__()
+
+        assert isinstance(input_obs_group_shapes, OrderedDict)
+        assert np.all([isinstance(input_obs_group_shapes[k], OrderedDict) for k in input_obs_group_shapes])
+        assert isinstance(output_shapes, OrderedDict)
+
+        self.input_obs_group_shapes = input_obs_group_shapes
+        self.output_shapes = output_shapes
+
+        self.nets = nn.ModuleDict()
+
+        self.nets["obsEncoder"] = ObservationGroupEmbedder(input_obs_group_shapes, d_model=d_model, 
+            backbone_kwargs=backbone_kwargs, encoder_kwargs=encoder_kwargs)
+
+        encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
+                                                dropout, activation, normalize_before)
+        encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
+        self.nets["transformerEncoder"] = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
+
+        decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
+                                                dropout, activation, normalize_before)
+        decoder_norm = nn.LayerNorm(d_model)
+        self.nets["transformerDecoder"] = TransformerDecoder(decoder_layer, num_decoder_layers, decoder_norm,
+                                          return_intermediate=return_intermediate_dec)
+
+        self.query_length_presum = [0]
+        for k in output_shapes:
+            length, heads = output_shapes[k]
+            self.query_length_presum.append(self.query_length_presum[-1] + length)
+            for outhead, outheaddim in heads.items():
+                self.nets[k + "_" + outhead] = nn.Linear(d_model, outheaddim)
+
+        self.query_embed = nn.Embedding(self.query_length_presum[-1], d_model)
+
+        self._reset_parameters()
+        self.d_model = d_model
+        self.nhead = nhead
+
+    def output_shape(self, input_shape=None):
+        """
+        Returns output shape for this module, which is a dictionary instead
+        of a list since outputs are dictionaries.
+        """
+        # return { k : list(self.output_shapes[k]) for k in self.output_shapes }
+
+
+    def forward(self, **inputs):
+        """
+        Process each set of inputs in its own observation group.
+
+        Args:
+            inputs (dict): a dictionary of dictionaries with one dictionary per
+                observation group. Each observation group's dictionary should map
+                modality to torch.Tensor batches. Should be consistent with
+                @self.input_obs_group_shapes.
+
+        Returns:
+            outputs (dict): dictionary of output torch.Tensors, that corresponds
+                to @self.output_shapes
+        """
+        # process each observation group
+        src, pos_embed = self.nets["obsEncoder"](**inputs) # bs, seq, dim
+        src = src.permute(1, 0, 2) # seq, bs, dim
+        pos_embed = pos_embed.permute(1, 0, 2) # seq, bs, dim
+
+        memory = self.nets["transformerEncoder"](src, src_key_padding_mask=None, pos=pos_embed)
+
+        bs = src.shape[1]
+        query_embed = self.query_embed.weight.unsqueeze(1).repeat(1, bs, 1)
+        tgt = torch.zeros_like(query_embed)
+        hs = self.nets["transformerDecoder"](tgt, memory, memory_key_padding_mask=None,
+                        pos=pos_embed, query_pos=query_embed)
+        hs = hs.transpose(1, 2)[0]
+
+        out = OrderedDict()
+        for i,k in enumerate(self.output_shapes):
+            length, heads = self.output_shapes[k]
+            for outhead, outheaddim in heads.items():
+                out[k + "_" + outhead] = self.nets[k + "_" + outhead](
+                    hs[:, self.query_length_presum[i]:self.query_length_presum[i+1], :]
+                )
+        return out
+
+
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def _to_string(self):
+        """
+        Subclasses should override this method to print out info about network / policy.
+        """
+        return 'Encoder/Decoder Transformer with {} heads'.format(self.nhead)
+
+    def __repr__(self):
+        """Pretty print network."""
+        header = '{}'.format(str(self.__class__.__name__))
+        msg = ''
+        indent = ' ' * 4
+        if self._to_string() != '':
+            msg += textwrap.indent("\n" + self._to_string() + "\n", indent)
+        msg += textwrap.indent("\n\nobsEncoder={}".format(self.nets["obsEncoder"]), indent)
+        msg += textwrap.indent("\n\ntransformerEncoder={}".format(self.nets["transformerEncoder"]), indent)
+        msg += textwrap.indent("\n\ntransformerDecoder={}".format(self.nets["transformerDecoder"]), indent)
+        msg += textwrap.indent("\n\nhat_action={}".format(self.nets["hat_action"]), indent)
+        msg = header + '(' + msg + '\n)'
+        return msg
+

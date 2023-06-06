@@ -11,15 +11,15 @@ import torch.nn.functional as F
 import robomimic.models.base_nets as BaseNets
 import robomimic.models.obs_nets as ObsNets
 from robomimic.models.policy_nets import DETRVAEActor
-from robomimic.models.backbone import build_backbone
-from robomimic.models.transformer import build_transformer, TransformerEncoder, TransformerEncoderLayer
+
+from robomimic.models.transformer import TransformerEncoder, TransformerEncoderLayer
 import robomimic.models.vae_nets as VAENets
 import robomimic.utils.loss_utils as LossUtils
 import robomimic.utils.tensor_utils as TensorUtils
 import robomimic.utils.torch_utils as TorchUtils
 import robomimic.utils.obs_utils as ObsUtils
 
-from robomimic.algo import register_algo_factory_func, PolicyAlgo
+from robomimic.algo import register_algo_factory_func, ActionChunkingAlgo
 import torchvision.transforms as transforms
 
 
@@ -71,7 +71,7 @@ def kl_divergence(mu, logvar):
     return total_kld, dimension_wise_kld, mean_kld
 
 
-class ACT(PolicyAlgo):
+class ACT(ActionChunkingAlgo):
     """
     Normal ACT training.
     """
@@ -113,6 +113,22 @@ class ACT(PolicyAlgo):
         self.nets = nn.ModuleDict()
         # TODO: consider if self.obs_shapes are needed
         # self._create_shapes(obs_config.modalities, obs_key_shapes)
+
+        # determine shapes
+        self.transformer_obs_group_shapes = OrderedDict()
+        
+        # We check across all modalitie specified in the config. store its corresponding shape internally
+        for k in obs_key_shapes:
+            for group, modality in obs_config.actor.modalities.items():
+                modality_obs = [v for vv in modality.values() for v in vv] # flatten
+                if k in modality_obs:
+                    if group not in self.transformer_obs_group_shapes:
+                        self.transformer_obs_group_shapes[group] = OrderedDict()
+                    self.transformer_obs_group_shapes[group][k] = obs_key_shapes[k]
+        
+        self.latent_dim = 32 # final size of latent z # TODO tune
+        self.transformer_obs_group_shapes["latent"] = OrderedDict(style=(self.latent_dim,))
+
         self._create_networks()
         self._create_optimizers()
         assert isinstance(self.nets, nn.ModuleDict)
@@ -129,17 +145,20 @@ class ACT(PolicyAlgo):
         # From state
         # backbone = None # from state for now, no need for conv nets
         # From image
-        backbone = build_backbone(self.algo_config.backbone)
-        transformer = build_transformer(self.algo_config.transformer)
         encoder = build_encoder(self.algo_config.encoder)
         model = DETRVAEActor(
-            backbone,
-            transformer,
+            # backbone,
+            # transformer,
+            self.algo_config.transformer.d_model,
+            self.transformer_obs_group_shapes,
             encoder,
             state_dim=9, # TODO: change it to using self.obs_shapes
+            latent_dim = self.latent_dim,
             action_dim=self.ac_dim,
             num_queries=self.algo_config.chunk_size,
-            camera_names=self.algo_config.camera_names,
+            transformer_kwargs=self.algo_config.transformer,
+            backbone_kwargs=self.algo_config.backbone,
+            encoder_kwargs=self.obs_config.actor.encoder
         )
 
         n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -163,14 +182,13 @@ class ACT(PolicyAlgo):
             input_batch (dict): processed and filtered batch that
                 will be used for training 
         """
-        input_batch = dict()
-        input_batch["obs"] = dict()
-        images = [batch["obs"][c][:,0,None,...] for c in self.algo_config.camera_names]
-        input_batch["obs"]["image"] = torch.cat(images, dim=1) # batch num_cam, 
+        input_batch = OrderedDict()
+        input_batch["cams"] = OrderedDict({k:v[:,0,:,:,:] for k,v in batch["obs"].items() if "_image" in k})
+        input_batch["joints"] = OrderedDict({k:v[:,0,...] for k,v in batch["obs"].items() if k in ["robot0_eef_pos", "robot0_eef_quat", "robot0_gripper_qpos"]})
         eef_pos = batch["obs"]["robot0_eef_pos"][:,0,...]
         eef_quat = batch["obs"]["robot0_eef_quat"][:,0,...]
         gripper_qpos = batch["obs"]["robot0_gripper_qpos"][:,0,...]
-        input_batch["obs"]["low_dim"] = torch.cat([eef_pos, eef_quat, gripper_qpos], dim = -1)
+        input_batch["low_dim"] = torch.cat([eef_pos, eef_quat, gripper_qpos], dim = -1)
         input_batch["actions"] = batch["actions"] # batch_size, seq_length, 7
         input_batch["is_pad"] = ~batch["pad_mask"][:,:,0]
         return TensorUtils.to_device(TensorUtils.to_float(input_batch), self.device)
@@ -217,15 +235,15 @@ class ACT(PolicyAlgo):
         Returns:
             predictions (dict): dictionary containing network outputs
         """
-        image = batch["obs"]["image"]
+        # image = batch["obs"]["image"]
         # image = self.imgnormalize(image)
-        qpos = batch["obs"]["low_dim"]
+        qpos = batch["low_dim"]
         actions = batch["actions"]
         is_pad = batch["is_pad"].to(dtype=torch.bool)
         actions = actions[:, :self.nets["policy"].num_queries]
         is_pad = is_pad[:, :self.nets["policy"].num_queries]
 
-        a_hat, is_pad_hat, (mu, logvar) = self.nets["policy"](qpos, image, None, actions, is_pad)
+        a_hat, is_pad_hat, (mu, logvar) = self.nets["policy"](batch, qpos, None, actions, is_pad)
         predictions = OrderedDict(
             a_hat=a_hat,
             is_pad_hat=is_pad_hat,

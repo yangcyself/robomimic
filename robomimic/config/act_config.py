@@ -39,13 +39,13 @@ class ACTConfig(BaseConfig):
         self.algo.backbone.position_embedding = "sine"
         
         # transformer settings
-        self.algo.transformer.hidden_dim = 512           
+        self.algo.transformer.d_model = 512           
         self.algo.transformer.dropout = 0.1                  
-        self.algo.transformer.nheads = 8       
+        self.algo.transformer.nhead = 8       
         self.algo.transformer.dim_feedforward = 2048
-        self.algo.transformer.enc_layers = 4
-        self.algo.transformer.dec_layers = 6
-        self.algo.transformer.pre_norm = False
+        self.algo.transformer.num_encoder_layers = 4
+        self.algo.transformer.num_decoder_layers = 6
+        self.algo.transformer.normalize_before = False
 
         # encoder settings
         self.algo.encoder.hidden_dim = 512
@@ -59,8 +59,32 @@ class ACTConfig(BaseConfig):
         """
         Update from superclass so that value planner and actor each get their own obs config.
         """
+
         self.observation.action_encoder = BCConfig().observation
-        self.observation.actor = BCConfig().observation
+
+        ## Set the encoders of the observations to default
+        self.observation.actor.encoder = BCConfig().observation.encoder
+
+        ## TODO: See if this can be changed to list
+        self.observation.actor.modalities.joints.low_dim = []            # specify low-dim observations for agent
+        self.observation.actor.modalities.joints.rgb = []              # specify rgb image observations for agent
+        self.observation.actor.modalities.joints.depth = []
+        self.observation.actor.modalities.joints.scan = []
+        self.observation.actor.modalities.latent.low_dim = []
+        self.observation.actor.modalities.latent.rgb = []
+        self.observation.actor.modalities.latent.depth = []
+        self.observation.actor.modalities.latent.scan = []
+        self.observation.actor.modalities.cams.low_dim = []
+        self.observation.actor.modalities.cams.rgb = []
+        self.observation.actor.modalities.cams.depth = []
+        self.observation.actor.modalities.cams.scan = []
+        self.observation.actor.modalities.goal.low_dim = []           # specify low-dim goal observations to condition agent on
+        self.observation.actor.modalities.goal.rgb = []             # specify rgb image goal observations to condition agent on
+        self.observation.actor.modalities.goal.depth = []
+        self.observation.actor.modalities.goal.scan = []
+        self.observation.actor.modalities.joints.do_not_lock_keys()
+        self.observation.actor.modalities.goal.do_not_lock_keys()
+        self.observation.actor.modalities.cams.do_not_lock_keys()
 
 
     @property
@@ -72,7 +96,8 @@ class ACTConfig(BaseConfig):
         return sorted(tuple(set([
             obs_key for group in [
                 self.observation.action_encoder.modalities.obs.values(),
-                self.observation.actor.modalities.obs.values(),
+                self.observation.actor.modalities.joints.values(),
+                self.observation.actor.modalities.cams.values(),
             ]
             for modality in group
             for obs_key in modality

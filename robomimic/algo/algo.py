@@ -417,6 +417,37 @@ class HierarchicalAlgo(Algo):
         raise NotImplementedError
 
 
+class ActionChunkingAlgo(Algo):
+    """
+    Base class for all algorithms that follows encoder-decoder architecture
+    """
+    def get_action(self, obs_dict, goal_dict=None):
+        """
+        Get policy action outputs.
+
+        Args:
+            obs_dict (dict): current observation
+            goal_dict (dict): (optional) goal
+
+        Returns:
+            action (torch.Tensor): action tensor
+        """
+        raise NotImplementedError
+
+    def get_style(self, obs_dict, actions, goal_dict= None):
+        """
+        Get style variable from encoder
+
+        Args:
+            obs_dict (dict): current observation
+            actions (torch.Tensor): action sequence
+            goal_dict (dict): (optional) goal
+
+        Returns:
+            style (torch.Tensor): style tensor
+        """
+        raise NotImplementedError
+
 class RolloutPolicy(object):
     """
     Wraps @Algo object to make it easy to run policies in a rollout loop.
