@@ -1270,11 +1270,10 @@ class DETRVAEActor(Module):
         )
 
 
-    def forward(self, batchinput, qpos, env_state, actions=None, is_pad=None):
+    def forward(self, batchinput, qpos, actions=None, is_pad=None):
         """
         qpos: batch, qpos_dim
         image: batch, num_cam, channel, height, width
-        env_state: None
         actions: batch, seq, action_dim
         """
         is_training = actions is not None # train or val

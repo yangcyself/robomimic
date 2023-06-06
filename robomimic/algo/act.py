@@ -111,15 +111,30 @@ class ACT(ActionChunkingAlgo):
         self.obs_key_shapes = obs_key_shapes
 
         self.nets = nn.ModuleDict()
-        # TODO: consider if self.obs_shapes are needed
-        # self._create_shapes(obs_config.modalities, obs_key_shapes)
 
+        self._create_shapes(obs_config.actor.modalities, obs_key_shapes)
+        self._create_networks()
+        self._create_optimizers()
+        assert isinstance(self.nets, nn.ModuleDict)
+
+
+    def _create_shapes(self, obs_keys, obs_key_shapes):
+        """
+        Create transformer_obs_group_shapes dictionaries, to make it
+        easy for this algorithm object to keep track of observation key shapes. 
+        Each dictionary maps observation key to shape.
+
+        Args:
+            obs_keys (dict): dict of required observation keys for this training run (usually
+                specified by the obs config), e.g., {"joints": ["xxx", "xxx"], "cams": ["proxxx_image"]}
+            obs_key_shapes (dict): dict of observation key shapes, e.g., {"rgb": [3, 224, 224]}
+        """
         # determine shapes
         self.transformer_obs_group_shapes = OrderedDict()
         
         # We check across all modalitie specified in the config. store its corresponding shape internally
         for k in obs_key_shapes:
-            for group, modality in obs_config.actor.modalities.items():
+            for group, modality in obs_keys.items():
                 modality_obs = [v for vv in modality.values() for v in vv] # flatten
                 if k in modality_obs:
                     if group not in self.transformer_obs_group_shapes:
@@ -127,12 +142,7 @@ class ACT(ActionChunkingAlgo):
                     self.transformer_obs_group_shapes[group][k] = obs_key_shapes[k]
         
         self.latent_dim = 32 # final size of latent z # TODO tune
-        self.transformer_obs_group_shapes["latent"] = OrderedDict(style=(self.latent_dim,))
-
-        self._create_networks()
-        self._create_optimizers()
-        assert isinstance(self.nets, nn.ModuleDict)
-
+        self.transformer_obs_group_shapes["latent"] = OrderedDict(style=[self.latent_dim])
 
 
     def _create_networks(self):
@@ -243,7 +253,7 @@ class ACT(ActionChunkingAlgo):
         actions = actions[:, :self.nets["policy"].num_queries]
         is_pad = is_pad[:, :self.nets["policy"].num_queries]
 
-        a_hat, is_pad_hat, (mu, logvar) = self.nets["policy"](batch, qpos, None, actions, is_pad)
+        a_hat, is_pad_hat, (mu, logvar) = self.nets["policy"](batch, qpos, actions, is_pad)
         predictions = OrderedDict(
             a_hat=a_hat,
             is_pad_hat=is_pad_hat,
@@ -343,6 +353,10 @@ class ACT(ActionChunkingAlgo):
         gripper_qpos = obs_dict["robot0_gripper_qpos"]
         qpos = torch.cat([eef_pos, eef_quat, gripper_qpos], dim = -1)
 
-        a_hat,_,_ = self.nets["policy"](qpos, images, None) # no action, sample from prior
+        input_batch = OrderedDict()
+        input_batch["cams"] = OrderedDict({k:v for k,v in obs_dict.items() if "_image" in k})
+        input_batch["joints"] = OrderedDict({k:v for k,v in obs_dict.items() if k in ["robot0_eef_pos", "robot0_eef_quat", "robot0_gripper_qpos"]})
+
+        a_hat,_,_ = self.nets["policy"](input_batch, qpos) # no action, sample from prior
         return a_hat[:,0,:] # TODO, average chunk this
 

@@ -1016,7 +1016,7 @@ class ObservationGroupEmbedder(Module):
         for k in self.observation_group_shapes:
             msg += '\n'
             indent = ' ' * 4
-            msg += textwrap.indent("group={}\n{}".format(k, self.nets[k]), indent)
+            msg += textwrap.indent("group={}\n{}\n{}".format(k, self.nets[k], self.nets[k+"_proj"]), indent)
         msg = header + '(' + msg + '\n)'
         return msg
 

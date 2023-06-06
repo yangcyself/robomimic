@@ -72,7 +72,6 @@
             "kl_weight": 10
         },
         "chunk_size": 100,
-        "camera_names": ["agentview_image", "robot0_eye_in_hand_image"],
         "backbone":{
             "train_backbone" : false,
             "return_interm_layers": false,

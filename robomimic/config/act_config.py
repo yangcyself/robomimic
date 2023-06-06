@@ -27,7 +27,6 @@ class ACTConfig(BaseConfig):
         self.algo.loss.kl_weight = 10.0      # L2 loss weight
 
         self.algo.chunk_size = 100
-        self.algo.camera_names = ["agentview_image"]
 
 
         # backbone settings
