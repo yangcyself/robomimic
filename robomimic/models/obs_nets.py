@@ -1155,7 +1155,10 @@ class MIMO_TRANSFORMER(Module):
 
 
     def _reset_parameters(self):
-        for p in self.parameters():
+        for p in self.nets['transformerEncoder'].parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+        for p in self.nets['transformerDecoder'].parameters():
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
