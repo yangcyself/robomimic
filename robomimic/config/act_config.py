@@ -55,9 +55,12 @@ class ACTConfig(BaseConfig):
         self.algo.encoder.normalize_before = False
 
         # rollout settings
-        self.algo.rollout.temporal_ensemble = True
+        self.algo.rollout.temporal_ensemble = False
         self.algo.rollout.maxhorizon = 400
-        self.algo.rollout.query_frequency = 5
+        self.algo.rollout.query_frequency = 1
+
+        # If provided, should contains the mean and std to normalize the 'actions' from the dataset
+        self.algo.action_space_normalizer = None
 
     def observation_config(self):
         """

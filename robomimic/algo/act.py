@@ -96,6 +96,7 @@ class ACT(ActionChunkingAlgo):
         self.obs_key_shapes = obs_key_shapes
 
         self.query_frequency = algo_config.rollout.query_frequency
+        self.action_space_normalizer = self.algo_config.action_space_normalizer
 
         self.nets = nn.ModuleDict()
 
@@ -208,7 +209,7 @@ class ACT(ActionChunkingAlgo):
             })
 
         input_batch["seq:actions"] = OrderedDict(
-            actions = batch["actions"], # batch_size, seq_length, 7
+            actions = self._pre_action(batch["actions"]), # batch_size, seq_length, 7
             is_pad = ~batch["pad_mask"][:,:,0]
         )
         return TensorUtils.to_device(TensorUtils.to_float(input_batch), self.device)
@@ -368,11 +369,11 @@ class ACT(ActionChunkingAlgo):
             exp_weights = exp_weights / exp_weights.sum()
             raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
         else:
-            raw_action = self.all_actions[:, t % self.query_frequency]
+            raw_action = self._all_actions[:, t % self.query_frequency]
 
         self._act_counter += 1
-        # TODO: post process: handle the mean and std of action        
-        return raw_action # TODO, average chunk this
+        
+        return self._post_action(raw_action )
 
 
     def reset(self):
@@ -385,4 +386,26 @@ class ACT(ActionChunkingAlgo):
         chunk_size = self.algo_config.chunk_size
         if self.algo_config.rollout.temporal_ensemble:
             self._all_time_actions = torch.zeros([max_timesteps, max_timesteps + chunk_size, self.ac_dim]).to(self.device)
+
+    def _pre_action(self, action):
+        if(self.action_space_normalizer is not None):
+            act_mean = self.action_space_normalizer.get("mean", 0.0)
+            act_std = self.action_space_normalizer.get("std", 1.0)
+            if(type(act_mean) == list):
+                act_mean = torch.tensor(act_mean, dtype=torch.float32, device=self.device)
+            if(type(act_std) == list):
+                act_std = torch.tensor(act_std, dtype=torch.float32, device=self.device)
+            action = (action - act_mean)/act_std
+        return action
+    
+    def _post_action(self, action):
+        if(self.action_space_normalizer is not None):
+            act_mean = self.action_space_normalizer.get("mean", 0.0)
+            act_std = self.action_space_normalizer.get("std", 1.0)
+            if(type(act_mean) == list):
+                act_mean = torch.tensor(act_mean, dtype=torch.float32, device=self.device)
+            if(type(act_std) == list):
+                act_std = torch.tensor(act_std, dtype=torch.float32, device=self.device)
+            action = action * act_std + act_mean
+        return action
 

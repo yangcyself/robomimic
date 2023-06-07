@@ -97,9 +97,13 @@
             "normalize_before": false
         },
         "rollout":{
-            "temporal_ensemble": true,
+            "temporal_ensemble": false,
             "maxhorizon": 400,
-            "query_frequency": 5
+            "query_frequency": 1
+        },
+        "action_space_normalizer": {
+            "mean": 0.5,
+            "std":  2
         }
     },
     "observation": {

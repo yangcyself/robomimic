@@ -47,10 +47,6 @@
             "rewards",
             "dones"
         ],
-        "action_space_normalizer": {
-            "mean": [-0.5, -1, 0, 0,   0.1, -0.1, 0.4, 0, 0.2, 0],
-            "std":  [2   , 2 , 2, 1.1, 1.1, 1.0 , 1.0, 1, 0.5, 1]
-        },
         "goal_mode": null,
         "get_pad_mask": true,
         "load_next_obs": false,
@@ -100,6 +96,10 @@
             "dim_feedforward" : 2048,
             "num_encoder_layers" : 4,
             "normalize_before": false
+        },
+        "action_space_normalizer": {
+            "mean": [-0.5, -1, 0, 0,   0.1, -0.1, 0.4, 0, 0.2, 0],
+            "std":  [2   , 2 , 2, 1.1, 1.1, 1.0 , 1.0, 1, 0.5, 1]
         }
     },
     "observation": {

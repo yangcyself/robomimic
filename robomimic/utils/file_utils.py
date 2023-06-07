@@ -297,7 +297,7 @@ def config_from_checkpoint(algo_name=None, ckpt_path=None, ckpt_dict=None, verbo
 
     # restore config from loaded model dictionary
     config_dict = json.loads(ckpt_dict['config'])
-    update_config(cfg=config_dict)
+    # update_config(cfg=config_dict)
 
     if verbose:
         print("============= Loaded Config =============")
