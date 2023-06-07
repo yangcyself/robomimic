@@ -1160,7 +1160,7 @@ class MIMO_TRANSENCODER(Module):
         encoder_input = encoder_input.permute(1, 0, 2) # (seq+cls, bs, d_model)
 
         cls_is_pad = torch.full(cls_embed.shape[:2], False).to(cls_embed.device) # False: not a padding
-        is_pad = torch.cat([cls_is_pad, is_pad], axis=1)  # (bs, seq+cls)
+        is_pad = torch.cat([cls_is_pad, is_pad], axis=1).to(dtype=bool)  # (bs, seq+cls)
         
         pos_embed = self.pos_table.clone().detach()
         pos_embed = pos_embed.permute(1, 0, 2)  # (seq, 1, d_model)
