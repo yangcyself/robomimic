@@ -135,6 +135,9 @@ class ACT(ActionChunkingAlgo):
         self.latent_dim = 32 # final size of latent z # TODO tune
         self.actor_obs_group_shapes["latent"] = OrderedDict(style=[self.latent_dim])
 
+        self.all_obs_modalities = deepcopy(self.obs_config.action_encoder.modalities)
+        self.all_obs_modalities.update(self.obs_config.actor.modalities)
+
 
     def _create_networks(self):
         """
@@ -181,8 +184,14 @@ class ACT(ActionChunkingAlgo):
                 will be used for training 
         """
         input_batch = OrderedDict()
-        input_batch["cams"] = OrderedDict({k:v[:,0,:,:,:] for k,v in batch["obs"].items() if "_image" in k})
-        input_batch["joints"] = OrderedDict({k:v[:,0,...] for k,v in batch["obs"].items() if k in ["robot0_eef_pos", "robot0_eef_quat", "robot0_gripper_qpos"]})
+
+        for group, modalities in self.all_obs_modalities.items():
+            input_batch[group] = OrderedDict({
+                k:batch["obs"][k][:,0,...] 
+                for kk in modalities.values()
+                for k in kk
+            })
+
         input_batch["seq:actions"] = OrderedDict(
             actions = batch["actions"], # batch_size, seq_length, 7
             is_pad = ~batch["pad_mask"][:,:,0]
@@ -324,8 +333,12 @@ class ACT(ActionChunkingAlgo):
         assert not self.nets.training
 
         input_batch = OrderedDict()
-        input_batch["cams"] = OrderedDict({k:v for k,v in obs_dict.items() if "_image" in k})
-        input_batch["joints"] = OrderedDict({k:v for k,v in obs_dict.items() if k in ["robot0_eef_pos", "robot0_eef_quat", "robot0_gripper_qpos"]})
+        for group, modalities in self.all_obs_modalities.items():
+            input_batch[group] = OrderedDict({
+                k:obs_dict[k]
+                for kk in modalities.values()
+                for k in kk
+        })
 
         a_hat,_,_ = self.nets["policy"](input_batch) # no action, sample from prior
         return a_hat[:,0,:] # TODO, average chunk this

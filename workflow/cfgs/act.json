@@ -25,7 +25,7 @@
         "keep_all_videos": false,
         "video_skip": 5,
         "rollout": {
-            "enabled": true,
+            "enabled": false,
             "n": 50,
             "horizon": 400,
             "rate": 20,
@@ -72,7 +72,6 @@
             "kl_weight": 10
         },
         "chunk_size": 100,
-        "camera_names": ["rgb:hand_camera_rgb"],
         "backbone":{
             "train_backbone" : false,
             "return_interm_layers": false,
@@ -81,143 +80,106 @@
             "hidden_dim": 512
         },
         "transformer":{
-            "hidden_dim": 512,
+            "d_model": 512,
             "dropout": 0.1, 
-            "nheads" : 8,
+            "nhead" : 8,
             "dim_feedforward": 2048,
-            "enc_layers": 4,
-            "dec_layers": 6,
-            "pre_norm": false
+            "num_encoder_layers": 4,
+            "num_decoder_layers": 6,
+            "normalize_before": false
         },
         "encoder":{
-            "hidden_dim" : 512,
+            "d_model" : 512,
             "dropout" : 0.1,
-            "nheads" : 8,
+            "nhead" : 8,
             "dim_feedforward" : 2048,
-            "enc_layers" : 4,
-            "pre_norm": false
+            "num_encoder_layers" : 4,
+            "normalize_before": false
         }
     },
     "observation": {
-        "modalities": {
-            "obs": {
-                "low_dim": [
-                    "policy:dof_pos_normalized",
-                    "policy:dof_vel",
-                    "policy:ee_position"
-                ],
-                "rgb": [
-                    "rgb:hand_camera_rgb"
-                ],
-                "depth": [],
-                "scan": []
+        "action_encoder":{
+            "modalities": {
+                "joints": {
+                    "low_dim": [
+                        "policy:dof_pos_normalized",
+                        "policy:dof_vel",
+                        "policy:ee_position"
+                    ],
+                    "rgb": [],
+                    "depth": [],
+                    "scan": []
+                }
             },
-            "goal": {
-                "low_dim": [],
-                "rgb": [],
-                "depth": [],
-                "scan": []
+            "encoder": {
+                "low_dim": {
+                    "core_class": null,
+                    "core_kwargs": {},
+                    "obs_randomizer_class": null,
+                    "obs_randomizer_kwargs": {}
+                }
             }
         },
-        "encoder": {
-            "low_dim": {
-                "core_class": null,
-                "core_kwargs": {},
-                "obs_randomizer_class": null,
-                "obs_randomizer_kwargs": {}
-            },
-            "rgb": {
-                "core_class": "VisualCore",
-                "core_kwargs": {
-                    "feature_dimension": 64,
-                    "flatten": true,
-                    "backbone_class": "ResNet18Conv",
-                    "backbone_kwargs": {
-                        "pretrained": false,
-                        "input_coord_conv": false
-                    },
-                    "pool_class": "SpatialSoftmax",
-                    "pool_kwargs": {
-                        "num_kp": 32,
-                        "learnable_temperature": false,
-                        "temperature": 1.0,
-                        "noise_std": 0.0,
-                        "output_variance": false
-                    }
+        "actor":{
+            "modalities": {
+                "joints": {
+                    "low_dim": [
+                        "policy:dof_pos_normalized",
+                        "policy:dof_vel",
+                        "policy:ee_position"
+                    ],
+                    "rgb": [],
+                    "depth": [],
+                    "scan": []
                 },
-                "obs_randomizer_class": null,
-                "obs_randomizer_kwargs": {
-                    "crop_height": 76,
-                    "crop_width": 76,
-                    "num_crops": 1,
-                    "pos_enc": false
+                "cams": {
+                    "low_dim": [],
+                    "rgb": [
+                        "rgb:hand_camera_rgb"
+                    ],
+                    "depth": [],
+                    "scan": []
+                },
+                "goal": {
+                    "low_dim": [],
+                    "rgb": [],
+                    "depth": [],
+                    "scan": []
                 }
             },
-            "depth": {
-                "core_class": "VisualCore",
-                "core_kwargs": {
-                    "feature_dimension": 64,
-                    "flatten": true,
-                    "backbone_class": "ResNet18Conv",
-                    "backbone_kwargs": {
-                        "pretrained": false,
-                        "input_coord_conv": false
-                    },
-                    "pool_class": "SpatialSoftmax",
-                    "pool_kwargs": {
-                        "num_kp": 32,
-                        "learnable_temperature": false,
-                        "temperature": 1.0,
-                        "noise_std": 0.0,
-                        "output_variance": false
-                    }
+            "encoder": {
+                "low_dim": {
+                    "core_class": null,
+                    "core_kwargs": {},
+                    "obs_randomizer_class": null,
+                    "obs_randomizer_kwargs": {}
                 },
-                "obs_randomizer_class": null,
-                "obs_randomizer_kwargs": {
-                    "crop_height": 76,
-                    "crop_width": 76,
-                    "num_crops": 1,
-                    "pos_enc": false
-                }
-            },
-            "scan": {
-                "core_class": "ScanCore",
-                "core_kwargs": {
-                    "feature_dimension": 64,
-                    "flatten": true,
-                    "pool_class": "SpatialSoftmax",
-                    "pool_kwargs": {
-                        "num_kp": 32,
-                        "learnable_temperature": false,
-                        "temperature": 1.0,
-                        "noise_std": 0.0,
-                        "output_variance": false
+                "rgb": {
+                    "core_class": "VisualCore",
+                    "core_kwargs": {
+                        "feature_dimension": 64,
+                        "flatten": true,
+                        "backbone_class": "ResNet18Conv",
+                        "backbone_kwargs": {
+                            "pretrained": false,
+                            "input_coord_conv": false
+                        },
+                        "pool_class": "SpatialSoftmax",
+                        "pool_kwargs": {
+                            "num_kp": 32,
+                            "learnable_temperature": false,
+                            "temperature": 1.0,
+                            "noise_std": 0.0,
+                            "output_variance": false
+                        }
                     },
-                    "conv_activation": "relu",
-                    "conv_kwargs": {
-                        "out_channels": [
-                            32,
-                            64,
-                            64
-                        ],
-                        "kernel_size": [
-                            8,
-                            4,
-                            2
-                        ],
-                        "stride": [
-                            4,
-                            2,
-                            1
-                        ]
+                    "obs_randomizer_class": null,
+                    "obs_randomizer_kwargs": {
+                        "crop_height": 76,
+                        "crop_width": 76,
+                        "num_crops": 1,
+                        "pos_enc": false
                     }
-                },
-                "obs_randomizer_class": null,
-                "obs_randomizer_kwargs": {
-                    "crop_height": 76,
-                    "crop_width": 76,
-                    "num_crops": 1,
-                    "pos_enc": false
                 }
             }
         }
