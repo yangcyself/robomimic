@@ -1004,7 +1004,7 @@ class ObservationGroupEmbedder(Module):
             src = torch.zeros(bs, 0, self.d_model, device = device)
             pos_embed = torch.zeros(bs, 0, self.d_model, device = device)
 
-        is_pad = torch.full(pos_embed.shape[:2], False).to(device) # False: not a padding
+        is_pad = torch.full(pos_embed.shape[:2], False, dtype=bool).to(device) # False: not a padding
 
         lowdim_inputs = [
             self.nets[f"{k}_proj"].forward(
@@ -1024,7 +1024,7 @@ class ObservationGroupEmbedder(Module):
 
         lowdim_ispad = [
             inputs[k]["is_pad"] if k.startswith("seq:") 
-                else torch.full(lowdim_inputs[i].shape[:2], False).to(device)
+                else torch.full(lowdim_inputs[i].shape[:2], False, dtype=bool).to(device)
             for i,k in enumerate(self.low_dim_obs) 
         ]
 
@@ -1159,7 +1159,7 @@ class MIMO_TRANSENCODER(Module):
         encoder_input = torch.cat([cls_embed, src], axis=1) # (bs, seq+cls, d_model)
         encoder_input = encoder_input.permute(1, 0, 2) # (seq+cls, bs, d_model)
 
-        cls_is_pad = torch.full(cls_embed.shape[:2], False).to(cls_embed.device) # False: not a padding
+        cls_is_pad = torch.full(cls_embed.shape[:2], False, dtype=bool).to(cls_embed.device) # False: not a padding
         is_pad = torch.cat([cls_is_pad, is_pad], axis=1).to(dtype=bool)  # (bs, seq+cls)
         
         pos_embed = self.pos_table.clone().detach()
