@@ -109,7 +109,11 @@
                     "low_dim": [
                         "policy:dof_pos_normalized",
                         "policy:dof_vel",
-                        "policy:ee_position"
+                        "policy:ee_position",
+                        "policy:elevator_btn_pressed",
+                        "policy:elevator_is_zerofloor",
+                        "policy:elevator_state",
+                        "policy:elevator_waittime"
                     ],
                     "rgb": [],
                     "depth": [],
@@ -131,7 +135,11 @@
                     "low_dim": [
                         "policy:dof_pos_normalized",
                         "policy:dof_vel",
-                        "policy:ee_position"
+                        "policy:ee_position",
+                        "policy:elevator_btn_pressed",
+                        "policy:elevator_is_zerofloor",
+                        "policy:elevator_state",
+                        "policy:elevator_waittime"
                     ],
                     "rgb": [],
                     "depth": [],
@@ -139,9 +147,7 @@
                 },
                 "cams": {
                     "low_dim": [],
-                    "rgb": [
-                        "rgb:hand_camera_rgb"
-                    ],
+                    "rgb": [],
                     "depth": [],
                     "scan": []
                 },
