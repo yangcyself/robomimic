@@ -136,6 +136,15 @@ def initialize_obs_modality_mapping_from_dict(modality_mapping):
 
 def initialize_obs_utils_with_obs_specs(obs_modality_specs):
     """
+    See @update_obs_utils_with_obs_specs
+    """
+    global OBS_KEYS_TO_MODALITIES, OBS_MODALITIES_TO_KEYS
+    OBS_KEYS_TO_MODALITIES = ObservationKeyToModalityDict()
+    update_obs_utils_with_obs_specs(obs_modality_specs)
+
+
+def update_obs_utils_with_obs_specs(obs_modality_specs):
+    """
     This function should be called before using any observation key-specific
     functions in this file, in order to make sure that all utility
     functions are aware of the observation modalities (e.g. which ones
@@ -175,9 +184,6 @@ def initialize_obs_utils_with_obs_specs(obs_modality_specs):
             situations where multiple modules may each have their own modality spec.
     """
     global OBS_KEYS_TO_MODALITIES, OBS_MODALITIES_TO_KEYS
-
-    OBS_KEYS_TO_MODALITIES = ObservationKeyToModalityDict()
-
     # accept one or more spec dictionaries - if it's just one, account for this
     if isinstance(obs_modality_specs, dict):
         obs_modality_spec_list = [obs_modality_specs]

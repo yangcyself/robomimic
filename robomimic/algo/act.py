@@ -96,11 +96,24 @@ class ACT(ActionChunkingAlgo):
 
         self.nets = nn.ModuleDict()
 
+        self._update_utils()
         self._create_shapes(obs_config.action_encoder.modalities, obs_config.actor.modalities, obs_key_shapes)
         self._create_networks()
         self._create_optimizers()
         assert isinstance(self.nets, nn.ModuleDict)
 
+    def _update_utils(self):
+        """Update the robotmimic systems such as ObsUtil. OBS_KEYS_TO_MODALITIES
+        """
+        act_internal_spec = {
+            "seq:actions":{ # the action sequence to action_encoder
+                "low_dim" : ["pad_mask"],
+            },
+            "latent":{
+                "low_dim" : ["style"],
+            }
+        }
+        ObsUtils.update_obs_utils_with_obs_specs(obs_modality_specs=act_internal_spec)
 
     def _create_shapes(self, encoder_obs_keys, actor_obs_keys, obs_key_shapes):
         """
