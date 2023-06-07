@@ -14,6 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributions as D
+from torch.autograd import Variable
 
 import robomimic.utils.tensor_utils as TensorUtils
 from robomimic.models.base_nets import Module
@@ -1210,7 +1211,7 @@ class VAEActor(Module):
             n = obs_dict[mod].shape[0]
         return self.decode(obs_dict=obs_dict, goal_dict=goal_dict, z=z, n=n)["action"]
 
-from torch.autograd import Variable # TODO Reorganize
+
 
 def reparametrize(mu, logvar):
     std = logvar.div(2).exp()

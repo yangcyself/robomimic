@@ -908,7 +908,6 @@ class ObservationGroupEmbedder(Module):
                         ...
                 obs_modality2: dict
                     ...
-        TODO: Handle the calculation of mask
         """
         super(ObservationGroupEmbedder, self).__init__()
 
@@ -1072,7 +1071,7 @@ class MIMO_TRANSENCODER(Module):
     observation dictionaries, with each key corresponding to an observation group.
 
     This module utilizes @ObservationGroupEncoder to process the multiple input dictionaries and
-    @ObservationDecoder to generate tensor dictionaries. The default behavior
+    to generate tensor dictionaries. The default behavior
 
     This module contains only a TransformerEncoder, the output are infered with [CLS] placeholders.
     """
@@ -1185,9 +1184,9 @@ class MIMO_TRANSFORMER(Module):
     observation dictionaries, with each key corresponding to an observation group.
 
     This module utilizes @ObservationGroupEncoder to process the multiple input dictionaries and
-    @ObservationDecoder to generate tensor dictionaries. The default behavior
+    to generate tensor dictionaries. The default behavior
     for encoding the inputs is to process visual inputs with a learned CNN and concatenating
-    the flat encodings with the other flat inputs. TODO: The default behavior for generating 
+    the flat encodings with the other flat inputs. The default behavior for generating 
     outputs is to use a linear layer branch to produce each modality separately
     (including visual outputs).
 

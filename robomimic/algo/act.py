@@ -89,6 +89,7 @@ class ACT(ActionChunkingAlgo):
         self.algo_config = algo_config
         self.obs_config = obs_config
         self.global_config = global_config
+        self.latent_dim = algo_config.latent_dim
 
         self.ac_dim = ac_dim
         self.device = device
@@ -145,7 +146,6 @@ class ACT(ActionChunkingAlgo):
                     self.actor_obs_group_shapes[group][k] = obs_key_shapes[k]
         
         self.encoder_obs_group_shapes["seq:actions"] = OrderedDict(actions=[self.algo_config.chunk_size, self.ac_dim])
-        self.latent_dim = 32 # final size of latent z # TODO tune
         self.actor_obs_group_shapes["latent"] = OrderedDict(style=[self.latent_dim])
 
         self.all_obs_modalities = deepcopy(self.obs_config.action_encoder.modalities)

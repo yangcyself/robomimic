@@ -26,9 +26,8 @@ class ACTConfig(BaseConfig):
 
         # loss weights
         self.algo.loss.kl_weight = 10.0      # L2 loss weight
-
         self.algo.chunk_size = 100
-
+        self.algo.latent_dim = 32
 
         # backbone settings
         self.algo.backbone.train_backbone = False       
@@ -65,7 +64,6 @@ class ACTConfig(BaseConfig):
         self.observation.action_encoder.encoder = BCConfig().observation.encoder
         self.observation.actor.encoder = BCConfig().observation.encoder
 
-        ## TODO: See if this can be changed to list
         self.observation.action_encoder.modalities = OrderedDict()             # modalities are not limited to specific groups
         self.observation.actor.modalities = OrderedDict()                      # modalities are not limited to specific groups
         
