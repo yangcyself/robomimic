@@ -54,6 +54,11 @@ class ACTConfig(BaseConfig):
         self.algo.encoder.num_encoder_layers = 4
         self.algo.encoder.normalize_before = False
 
+        # rollout settings
+        self.algo.rollout.temporal_ensemble = True
+        self.algo.rollout.maxhorizon = 400
+        self.algo.rollout.query_frequency = 5
+
     def observation_config(self):
         """
         Update from superclass so that value planner and actor each get their own obs config.

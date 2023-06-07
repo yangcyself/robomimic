@@ -95,6 +95,8 @@ class ACT(ActionChunkingAlgo):
         self.device = device
         self.obs_key_shapes = obs_key_shapes
 
+        self.query_frequency = algo_config.rollout.query_frequency
+
         self.nets = nn.ModuleDict()
 
         self._update_utils()
@@ -344,15 +346,43 @@ class ACT(ActionChunkingAlgo):
             action (torch.Tensor): action tensor
         """
         assert not self.nets.training
+        t = self._act_counter # A short hand
 
-        input_batch = OrderedDict()
-        for group, modalities in self.all_obs_modalities.items():
-            input_batch[group] = OrderedDict({
-                k:obs_dict[k]
-                for kk in modalities.values()
-                for k in kk
-        })
+        if t % self.query_frequency == 0:
+            input_batch = OrderedDict()
+            for group, modalities in self.all_obs_modalities.items():
+                input_batch[group] = OrderedDict({
+                    k:obs_dict[k]
+                    for kk in modalities.values()
+                    for k in kk
+            })
+            act_hat,_,_ = self.nets["policy"](input_batch) # no action, sample from prior
+            self._all_actions = act_hat #1 num_queries x action_dim TODO: Batch this
+        if self.algo_config.rollout.temporal_ensemble:
+            self._all_time_actions[[t], t:t+self.algo_config.chunk_size] = self._all_actions
+            actions_for_curr_step = self._all_time_actions[:, t]
+            actions_populated = torch.all(actions_for_curr_step != 0, axis=1)
+            actions_for_curr_step = actions_for_curr_step[actions_populated]
+            k = 0.01
+            exp_weights = torch.exp(-k * torch.arange(len(actions_for_curr_step))).to(self.device).unsqueeze(dim=1)
+            exp_weights = exp_weights / exp_weights.sum()
+            raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
+        else:
+            raw_action = self.all_actions[:, t % self.query_frequency]
 
-        a_hat,_,_ = self.nets["policy"](input_batch) # no action, sample from prior
-        return a_hat[:,0,:] # TODO, average chunk this
+        self._act_counter += 1
+        # TODO: post process: handle the mean and std of action        
+        return raw_action # TODO, average chunk this
+
+
+    def reset(self):
+        """
+        Reset algo state to prepare for environment rollouts.
+        """
+        self._act_counter = 0
+        self._all_actions = None
+        max_timesteps = self.algo_config.rollout.maxhorizon
+        chunk_size = self.algo_config.chunk_size
+        if self.algo_config.rollout.temporal_ensemble:
+            self._all_time_actions = torch.zeros([max_timesteps, max_timesteps + chunk_size, self.ac_dim]).to(self.device)
 

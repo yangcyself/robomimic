@@ -95,6 +95,11 @@
             "dim_feedforward" : 2048,
             "num_encoder_layers" : 4,
             "normalize_before": false
+        },
+        "rollout":{
+            "temporal_ensemble": true,
+            "maxhorizon": 400,
+            "query_frequency": 5
         }
     },
     "observation": {
