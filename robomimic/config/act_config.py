@@ -4,6 +4,7 @@ Config for BC algorithm.
 
 from robomimic.config.base_config import BaseConfig
 from robomimic.config.bc_config import BCConfig
+from collections import OrderedDict
 
 
 class ACTConfig(BaseConfig):
@@ -47,44 +48,27 @@ class ACTConfig(BaseConfig):
         self.algo.transformer.normalize_before = False
 
         # encoder settings
-        self.algo.encoder.hidden_dim = 512
+        self.algo.encoder.d_model = 512
         self.algo.encoder.dropout = 0.1           
-        self.algo.encoder.nheads = 8           
+        self.algo.encoder.nhead = 8           
         self.algo.encoder.dim_feedforward = 2048
-        self.algo.encoder.enc_layers = 4
-        self.algo.encoder.pre_norm = False
+        self.algo.encoder.num_encoder_layers = 4
+        self.algo.encoder.normalize_before = False
 
     def observation_config(self):
         """
         Update from superclass so that value planner and actor each get their own obs config.
         """
 
-        self.observation.action_encoder = BCConfig().observation
 
         ## Set the encoders of the observations to default
+        self.observation.action_encoder.encoder = BCConfig().observation.encoder
         self.observation.actor.encoder = BCConfig().observation.encoder
 
         ## TODO: See if this can be changed to list
-        self.observation.actor.modalities.joints.low_dim = []            # specify low-dim observations for agent
-        self.observation.actor.modalities.joints.rgb = []              # specify rgb image observations for agent
-        self.observation.actor.modalities.joints.depth = []
-        self.observation.actor.modalities.joints.scan = []
-        self.observation.actor.modalities.latent.low_dim = []
-        self.observation.actor.modalities.latent.rgb = []
-        self.observation.actor.modalities.latent.depth = []
-        self.observation.actor.modalities.latent.scan = []
-        self.observation.actor.modalities.cams.low_dim = []
-        self.observation.actor.modalities.cams.rgb = []
-        self.observation.actor.modalities.cams.depth = []
-        self.observation.actor.modalities.cams.scan = []
-        self.observation.actor.modalities.goal.low_dim = []           # specify low-dim goal observations to condition agent on
-        self.observation.actor.modalities.goal.rgb = []             # specify rgb image goal observations to condition agent on
-        self.observation.actor.modalities.goal.depth = []
-        self.observation.actor.modalities.goal.scan = []
-        self.observation.actor.modalities.joints.do_not_lock_keys()
-        self.observation.actor.modalities.goal.do_not_lock_keys()
-        self.observation.actor.modalities.cams.do_not_lock_keys()
-
+        self.observation.action_encoder.modalities = OrderedDict()             # modalities are not limited to specific groups
+        self.observation.actor.modalities = OrderedDict()                      # modalities are not limited to specific groups
+        
 
     @property
     def all_obs_keys(self):
@@ -93,13 +77,13 @@ class ACTConfig(BaseConfig):
         """
         # pool all modalities
         return sorted(tuple(set([
-            obs_key for group in [
-                self.observation.action_encoder.modalities.obs.values(),
-                self.observation.actor.modalities.joints.values(),
-                self.observation.actor.modalities.cams.values(),
+            k for group in [
+                self.observation.action_encoder.modalities.values(),
+                self.observation.actor.modalities.values(),
             ]
             for modality in group
-            for obs_key in modality
+            for obs_keys in modality.values()
+            for k in obs_keys
         ])))
 
 
@@ -108,7 +92,6 @@ class ACTConfig(BaseConfig):
         """
         Update from superclass - value planner goal modalities determine goal-conditioning.
         """
-        return len(
-            self.observation.actor.modalities.goal.low_dim +
-            self.observation.actor.modalities.goal.rgb) > 0
+        return "goal" in self.observation.actor.modalities \
+            and sum([len(obs) for obs in self.observation.actor.modalities["goal"].values()]) > 0
 

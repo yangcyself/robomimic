@@ -17,7 +17,7 @@ import torch.distributions as D
 
 import robomimic.utils.tensor_utils as TensorUtils
 from robomimic.models.base_nets import Module
-from robomimic.models.obs_nets import MIMO_MLP, RNN_MIMO_MLP, MIMO_TRANSFORMER
+from robomimic.models.obs_nets import MIMO_MLP, RNN_MIMO_MLP, MIMO_TRANSFORMER, MIMO_TRANSENCODER
 from robomimic.models.vae_nets import VAE
 from robomimic.models.distributions import TanhWrappedDistribution
 
@@ -1218,45 +1218,40 @@ def reparametrize(mu, logvar):
     return mu + std * eps
 
 
-def get_sinusoid_encoding_table(n_position, d_hid):
-    def get_position_angle_vec(position):
-        return [position / np.power(10000, 2 * (hid_j // 2) / d_hid) for hid_j in range(d_hid)]
-
-    sinusoid_table = np.array([get_position_angle_vec(pos_i) for pos_i in range(n_position)])
-    sinusoid_table[:, 0::2] = np.sin(sinusoid_table[:, 0::2])  # dim 2i
-    sinusoid_table[:, 1::2] = np.cos(sinusoid_table[:, 1::2])  # dim 2i+1
-
-    return torch.FloatTensor(sinusoid_table).unsqueeze(0)
-
 class DETRVAEActor(Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, d_model, obs_group_shapes, encoder, state_dim, latent_dim, action_dim, num_queries,
-        transformer_kwargs, backbone_kwargs, encoder_kwargs):
+    def __init__(self, encoder_obs_group_shapes, actor_obs_group_shapes,  latent_dim, action_dim, num_queries,
+        encoder_kwargs, transformer_kwargs, backbone_kwargs, obs_encoder_kwargs):
         """ Initializes the model.
         Parameters:
-            backbone: torch module of the backbone to be used. See backbone.py
-            transformer: torch module of the transformer architecture. See transformer.py
-            state_dim: robot state dimension of the environment
-            action_dim: robot action dimension 
-            num_queries: number of object queries, ie detection slot. This is the maximal number of objects
-                         DETR can detect in a single image. For COCO, we recommend 100 queries.
-            aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
+            encoder_obs_group_shapes: a dictionary of dictionaries that maps modalities to their shapes
+            obs_group_shapes: a dictionary of dictionaries that maps modalities to their shapes
+            latent_dim: the dimension of the latent space
+            action_dim: the dimension of the action space
+            num_queries: the length of action sequences to be generated
+            encoder_kwargs: a dictionary of kwargs for the encoder
+            transformer_kwargs: a dictionary of kwargs for the transformer
+            backbone_kwargs: a dictionary of kwargs for the backbone
+            obs_encoder_kwargs: a dictionary of kwargs for the encoder
         """
         super().__init__()
         self.num_queries = num_queries
-        self.encoder = encoder
 
         # encoder extra parameters
         self.latent_dim = latent_dim
-        self.cls_embed = nn.Embedding(1, d_model) # extra cls token embedding
-        self.encoder_action_proj = nn.Linear(action_dim, d_model) # project action to embedding
-        self.encoder_state_proj = nn.Linear(state_dim, d_model) # project action to embedding
-        self.latent_proj = nn.Linear(d_model, self.latent_dim*2) # project hidden state to latent std, var
-        self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_queries, d_model)) # [CLS], qpos, a_seq
-        
+        self.encoder = MIMO_TRANSENCODER(
+            input_obs_group_shapes = encoder_obs_group_shapes,
+            output_shapes = OrderedDict(
+                latent = (1, OrderedDict(
+                    info = self.latent_dim*2
+                )),
+            ),
+            **encoder_kwargs,
+            encoder_kwargs=obs_encoder_kwargs
+        )
 
         self.transformer = MIMO_TRANSFORMER(
-            input_obs_group_shapes = obs_group_shapes,
+            input_obs_group_shapes = actor_obs_group_shapes,
             output_shapes = OrderedDict(
                 hat = (num_queries, OrderedDict(
                     action = action_dim,
@@ -1266,44 +1261,30 @@ class DETRVAEActor(Module):
             **transformer_kwargs,
             return_intermediate_dec=True,
             backbone_kwargs=backbone_kwargs,
-            encoder_kwargs=encoder_kwargs
+            encoder_kwargs=obs_encoder_kwargs
         )
 
 
-    def forward(self, batchinput, qpos, actions=None, is_pad=None):
+    def forward(self, batchinput, is_training=False):
         """
         qpos: batch, qpos_dim
         image: batch, num_cam, channel, height, width
         actions: batch, seq, action_dim
         """
-        is_training = actions is not None # train or val
-        bs, _ = qpos.shape
+        bs = tuple(tuple(batchinput.values())[0].values())[0].shape[0]
+        device = tuple(tuple(batchinput.values())[0].values())[0].device
         ### Obtain latent z from action sequence
         if is_training:
             # project action sequence to embedding dim, and concat with a CLS token
-            action_embed = self.encoder_action_proj(actions) # (bs, seq, d_model)
-            qpos_embed = self.encoder_state_proj(qpos)  # (bs, d_model)
-            qpos_embed = torch.unsqueeze(qpos_embed, axis=1)  # (bs, 1, d_model)
-            cls_embed = self.cls_embed.weight # (1, d_model)
-            cls_embed = torch.unsqueeze(cls_embed, axis=0).repeat(bs, 1, 1) # (bs, 1, d_model)
-            encoder_input = torch.cat([cls_embed, qpos_embed, action_embed], axis=1) # (bs, seq+1, d_model)
-            encoder_input = encoder_input.permute(1, 0, 2) # (seq+1, bs, d_model)
-            # do not mask cls token
-            cls_joint_is_pad = torch.full((bs, 2), False).to(qpos.device) # False: not a padding
-            is_pad = torch.cat([cls_joint_is_pad, is_pad], axis=1)  # (bs, seq+1)
-            # obtain position embedding
-            pos_embed = self.pos_table.clone().detach()
-            pos_embed = pos_embed.permute(1, 0, 2)  # (seq+1, 1, d_model)
             # query model
-            encoder_output = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
-            encoder_output = encoder_output[0] # take cls output only
-            latent_info = self.latent_proj(encoder_output)
-            mu = latent_info[:, :self.latent_dim]
-            logvar = latent_info[:, self.latent_dim:]
+            encoder_output = self.encoder(**batchinput)
+            latent_info = encoder_output["latent_info"]
+            mu = latent_info[:, :, :self.latent_dim].squeeze(1)
+            logvar = latent_info[:, :, self.latent_dim:].squeeze(1)
             latent_sample = reparametrize(mu, logvar)
         else:
             mu = logvar = None
-            latent_sample = torch.zeros([bs, self.latent_dim], dtype=torch.float32).to(qpos.device)
+            latent_sample = torch.zeros([bs, self.latent_dim], dtype=torch.float32).to(device)
 
         transformer_input = batchinput
         transformer_input["latent"] = OrderedDict(style=latent_sample)

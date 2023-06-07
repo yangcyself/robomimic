@@ -39,22 +39,6 @@ def algo_config_to_class(algo_config):
     return ACT, {}
 
 
-def build_encoder(args):
-    d_model = args.hidden_dim # 256
-    dropout = args.dropout # 0.1
-    nhead = args.nheads # 8
-    dim_feedforward = args.dim_feedforward # 2048
-    num_encoder_layers = args.enc_layers # 4 # TODO shared with VAE decoder
-    normalize_before = args.pre_norm # False
-    activation = "relu"
-
-    encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
-                                            dropout, activation, normalize_before)
-    encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
-    encoder = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
-
-    return encoder
-
 def kl_divergence(mu, logvar):
     batch_size = mu.size(0)
     assert batch_size != 0
@@ -112,15 +96,15 @@ class ACT(ActionChunkingAlgo):
 
         self.nets = nn.ModuleDict()
 
-        self._create_shapes(obs_config.actor.modalities, obs_key_shapes)
+        self._create_shapes(obs_config.action_encoder.modalities, obs_config.actor.modalities, obs_key_shapes)
         self._create_networks()
         self._create_optimizers()
         assert isinstance(self.nets, nn.ModuleDict)
 
 
-    def _create_shapes(self, obs_keys, obs_key_shapes):
+    def _create_shapes(self, encoder_obs_keys, actor_obs_keys, obs_key_shapes):
         """
-        Create transformer_obs_group_shapes dictionaries, to make it
+        Create encoder_obs_group_shapes and actor_obs_group_shapes dictionaries, to make it
         easy for this algorithm object to keep track of observation key shapes. 
         Each dictionary maps observation key to shape.
 
@@ -130,19 +114,26 @@ class ACT(ActionChunkingAlgo):
             obs_key_shapes (dict): dict of observation key shapes, e.g., {"rgb": [3, 224, 224]}
         """
         # determine shapes
-        self.transformer_obs_group_shapes = OrderedDict()
-        
+        self.actor_obs_group_shapes = OrderedDict()
+        self.encoder_obs_group_shapes = OrderedDict()
         # We check across all modalitie specified in the config. store its corresponding shape internally
         for k in obs_key_shapes:
-            for group, modality in obs_keys.items():
+            for group, modality in encoder_obs_keys.items():
+                modality_obs = [v for vv in modality.values() for v in vv] # flatten, vv are [low_dim, rgb, ...]
+                if k in modality_obs:
+                    if group not in self.encoder_obs_group_shapes:
+                        self.encoder_obs_group_shapes[group] = OrderedDict()
+                    self.encoder_obs_group_shapes[group][k] = obs_key_shapes[k]
+            for group, modality in actor_obs_keys.items():
                 modality_obs = [v for vv in modality.values() for v in vv] # flatten
                 if k in modality_obs:
-                    if group not in self.transformer_obs_group_shapes:
-                        self.transformer_obs_group_shapes[group] = OrderedDict()
-                    self.transformer_obs_group_shapes[group][k] = obs_key_shapes[k]
+                    if group not in self.actor_obs_group_shapes:
+                        self.actor_obs_group_shapes[group] = OrderedDict()
+                    self.actor_obs_group_shapes[group][k] = obs_key_shapes[k]
         
+        self.encoder_obs_group_shapes["seq:actions"] = OrderedDict(actions=[self.algo_config.chunk_size, self.ac_dim])
         self.latent_dim = 32 # final size of latent z # TODO tune
-        self.transformer_obs_group_shapes["latent"] = OrderedDict(style=[self.latent_dim])
+        self.actor_obs_group_shapes["latent"] = OrderedDict(style=[self.latent_dim])
 
 
     def _create_networks(self):
@@ -155,20 +146,17 @@ class ACT(ActionChunkingAlgo):
         # From state
         # backbone = None # from state for now, no need for conv nets
         # From image
-        encoder = build_encoder(self.algo_config.encoder)
+        # encoder = build_encoder(self.algo_config.encoder)
         model = DETRVAEActor(
-            # backbone,
-            # transformer,
-            self.algo_config.transformer.d_model,
-            self.transformer_obs_group_shapes,
-            encoder,
-            state_dim=9, # TODO: change it to using self.obs_shapes
+            self.encoder_obs_group_shapes,
+            self.actor_obs_group_shapes,
             latent_dim = self.latent_dim,
-            action_dim=self.ac_dim,
+            action_dim = self.ac_dim,
             num_queries=self.algo_config.chunk_size,
+            encoder_kwargs=self.algo_config.encoder,
             transformer_kwargs=self.algo_config.transformer,
             backbone_kwargs=self.algo_config.backbone,
-            encoder_kwargs=self.obs_config.actor.encoder
+            obs_encoder_kwargs=self.obs_config.actor.encoder
         )
 
         n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -195,12 +183,10 @@ class ACT(ActionChunkingAlgo):
         input_batch = OrderedDict()
         input_batch["cams"] = OrderedDict({k:v[:,0,:,:,:] for k,v in batch["obs"].items() if "_image" in k})
         input_batch["joints"] = OrderedDict({k:v[:,0,...] for k,v in batch["obs"].items() if k in ["robot0_eef_pos", "robot0_eef_quat", "robot0_gripper_qpos"]})
-        eef_pos = batch["obs"]["robot0_eef_pos"][:,0,...]
-        eef_quat = batch["obs"]["robot0_eef_quat"][:,0,...]
-        gripper_qpos = batch["obs"]["robot0_gripper_qpos"][:,0,...]
-        input_batch["low_dim"] = torch.cat([eef_pos, eef_quat, gripper_qpos], dim = -1)
-        input_batch["actions"] = batch["actions"] # batch_size, seq_length, 7
-        input_batch["is_pad"] = ~batch["pad_mask"][:,:,0]
+        input_batch["seq:actions"] = OrderedDict(
+            actions = batch["actions"], # batch_size, seq_length, 7
+            is_pad = ~batch["pad_mask"][:,:,0]
+        )
         return TensorUtils.to_device(TensorUtils.to_float(input_batch), self.device)
 
     def train_on_batch(self, batch, epoch, validate=False):
@@ -245,15 +231,8 @@ class ACT(ActionChunkingAlgo):
         Returns:
             predictions (dict): dictionary containing network outputs
         """
-        # image = batch["obs"]["image"]
-        # image = self.imgnormalize(image)
-        qpos = batch["low_dim"]
-        actions = batch["actions"]
-        is_pad = batch["is_pad"].to(dtype=torch.bool)
-        actions = actions[:, :self.nets["policy"].num_queries]
-        is_pad = is_pad[:, :self.nets["policy"].num_queries]
 
-        a_hat, is_pad_hat, (mu, logvar) = self.nets["policy"](batch, qpos, actions, is_pad)
+        a_hat, is_pad_hat, (mu, logvar) = self.nets["policy"](batch, True)
         predictions = OrderedDict(
             a_hat=a_hat,
             is_pad_hat=is_pad_hat,
@@ -261,7 +240,6 @@ class ACT(ActionChunkingAlgo):
             logvar=logvar,
         )
         return predictions
-
 
     def _compute_losses(self, predictions, batch):
         """
@@ -279,9 +257,9 @@ class ACT(ActionChunkingAlgo):
 
         total_kld, dim_wise_kld, mean_kld = kl_divergence(predictions["mu"], predictions["logvar"])
 
-        actions = batch["actions"]
+        actions = batch["seq:actions"]["actions"]
         actions = actions[:, :self.nets["policy"].num_queries]
-        is_pad = batch["is_pad"].to(dtype=torch.bool)
+        is_pad = batch["seq:actions"]["is_pad"].to(dtype=torch.bool)
         is_pad = is_pad[:, :self.nets["policy"].num_queries]
 
         loss_dict = dict()
@@ -345,16 +323,10 @@ class ACT(ActionChunkingAlgo):
         """
         assert not self.nets.training
 
-        # image = self.imgnormalize(image)
-        eef_pos = obs_dict["robot0_eef_pos"]
-        eef_quat = obs_dict["robot0_eef_quat"]
-        gripper_qpos = obs_dict["robot0_gripper_qpos"]
-        qpos = torch.cat([eef_pos, eef_quat, gripper_qpos], dim = -1)
-
         input_batch = OrderedDict()
         input_batch["cams"] = OrderedDict({k:v for k,v in obs_dict.items() if "_image" in k})
         input_batch["joints"] = OrderedDict({k:v for k,v in obs_dict.items() if k in ["robot0_eef_pos", "robot0_eef_quat", "robot0_gripper_qpos"]})
 
-        a_hat,_,_ = self.nets["policy"](input_batch, qpos) # no action, sample from prior
+        a_hat,_,_ = self.nets["policy"](input_batch) # no action, sample from prior
         return a_hat[:,0,:] # TODO, average chunk this
 

@@ -89,18 +89,18 @@
             "normalize_before": false
         },
         "encoder":{
-            "hidden_dim" : 512,
+            "d_model" : 512,
             "dropout" : 0.1,
-            "nheads" : 8,
+            "nhead" : 8,
             "dim_feedforward" : 2048,
-            "enc_layers" : 4,
-            "pre_norm": false
+            "num_encoder_layers" : 4,
+            "normalize_before": false
         }
     },
     "observation": {
         "action_encoder":{
             "modalities": {
-                "obs": {
+                "joints": {
                     "low_dim": [
                         "robot0_eef_pos",
                         "robot0_eef_quat",
@@ -127,14 +127,6 @@
                         "robot0_eef_pos",
                         "robot0_eef_quat",
                         "robot0_gripper_qpos"
-                    ],
-                    "rgb": [],
-                    "depth": [],
-                    "scan": []
-                },
-                "latent": {
-                    "low_dim": [
-                        "style"
                     ],
                     "rgb": [],
                     "depth": [],

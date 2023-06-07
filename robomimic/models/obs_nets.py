@@ -254,6 +254,7 @@ class ObservationEncoder(Module):
         Compute the output shape of the encoder.
         """
         feat_dim = 0
+        seq_dim = None
         for k in self.obs_shapes:
             feat_shape = self.obs_shapes[k]
             if self.obs_randomizers[k] is not None:
@@ -262,8 +263,9 @@ class ObservationEncoder(Module):
                 feat_shape = self.obs_nets[k].output_shape(feat_shape)
             if self.obs_randomizers[k] is not None:
                 feat_shape = self.obs_randomizers[k].output_shape_out(feat_shape)
-            feat_dim += int(np.prod(feat_shape))
-        return [feat_dim]
+            feat_dim += int(np.prod(feat_shape[self.flatten_begin_axis-1:]))
+            seq_dim = feat_shape[:self.flatten_begin_axis-1]
+        return seq_dim + [feat_dim]
 
     def __repr__(self):
         """
@@ -281,6 +283,7 @@ class ObservationEncoder(Module):
             msg += textwrap.indent("sharing_from={}\n".format(self.obs_share_mods[k]), indent)
             msg += textwrap.indent(")", ' ' * 4)
         msg += textwrap.indent("\noutput_shape={}".format(self.output_shape()), ' ' * 4)
+        msg += textwrap.indent("\nflatten_begin_axis={}".format(self.flatten_begin_axis), ' ' * 4)
         msg = header + '(' + msg + '\n)'
         return msg
 
@@ -914,6 +917,7 @@ class ObservationGroupEmbedder(Module):
         assert np.all([isinstance(observation_group_shapes[k], OrderedDict) for k in observation_group_shapes])
         
         self.observation_group_shapes = observation_group_shapes
+        self.d_model = d_model
 
         # create an observation encoder per observation group
         self.nets = nn.ModuleDict()
@@ -927,23 +931,34 @@ class ObservationGroupEmbedder(Module):
         #         encoder_kwargs=encoder_kwargs,
         #     )
 
-        self.low_dim_obs = ['latent', 'joints']
+        self.low_dim_obs = []
+        for obs_group, obs in self.observation_group_shapes.items():
+            k = list(obs.keys())[0] # Assume the group are in the same modality
+            if (ObsUtils.OBS_KEYS_TO_MODALITIES[k] == "low_dim"):
+                self.low_dim_obs.append(obs_group)
+
         for obs_group in self.low_dim_obs:
+            flatten_begin_axis = 2 if obs_group.startswith("seq:") else 1
+            # filter out key word "is_pad"
+            obs_shapes = OrderedDict({
+                k: v for k, v in self.observation_group_shapes[obs_group].items() 
+                if k != "is_pad"
+            })
             self.nets[obs_group] = obs_encoder_factory(
-                obs_shapes=self.observation_group_shapes[obs_group],
+                obs_shapes=obs_shapes,
                 feature_activation=None,
-                flatten_begin_axis = 1, # batch
+                flatten_begin_axis = flatten_begin_axis, # batch
                 encoder_kwargs=encoder_kwargs,
             )
-            self.nets[obs_group + "_proj"] = nn.Linear(self.nets[obs_group].output_shape()[0], d_model)
+            self.nets[obs_group + "_proj"] = nn.Linear(self.nets[obs_group].output_shape()[-1], d_model)
 
         self.low_dim_pos_embed = nn.Embedding(len(self.low_dim_obs), d_model) # learned position embedding for proprio and latent
 
-        self.camera_names = observation_group_shapes["cams"].keys()
         # TODO: Implant backbone into ObservationEncoder
-        backbone = build_backbone(backbone_kwargs)
-        self.nets["cams"] = backbone
-        self.nets["cams_proj"] = nn.Conv2d(backbone.num_channels, d_model, kernel_size=1)
+        if(backbone_kwargs is not None):
+            backbone = build_backbone(backbone_kwargs)
+            self.nets["cams"] = backbone
+            self.nets["cams_proj"] = nn.Conv2d(backbone.num_channels, d_model, kernel_size=1)
 
     def forward(self, **inputs):
         """
@@ -966,23 +981,30 @@ class ObservationGroupEmbedder(Module):
         assert set(self.observation_group_shapes.keys()).issubset(inputs), "{} does not contain all observation groups {}".format(
             list(inputs.keys()), list(self.observation_group_shapes.keys())
         )
+        device = tuple(tuple(inputs.values())[0].values())[0].device
+        bs = tuple(tuple(inputs.values())[0].values())[0].shape[0]
+        if("cams" in self.observation_group_shapes):
+            all_cam_features = []
+            all_cam_pos = []
+            for img in inputs["cams"].values():
+                features, pos = self.nets["cams"](img)
+                features = features[0] # take the last layer feature
+                pos = pos[0]
+                all_cam_features.append(self.nets["cams_proj"](features))
+                all_cam_pos.append(pos)
+            # fold camera dimension into width dimension
+            src = torch.cat(all_cam_features, axis=3)
+            pos = torch.cat(all_cam_pos, axis=3)
 
-        all_cam_features = []
-        all_cam_pos = []
-        for img in inputs["cams"].values():
-            features, pos = self.nets["cams"](img)
-            features = features[0] # take the last layer feature
-            pos = pos[0]
-            all_cam_features.append(self.nets["cams_proj"](features))
-            all_cam_pos.append(pos)
-        # fold camera dimension into width dimension
-        src = torch.cat(all_cam_features, axis=3)
-        pos = torch.cat(all_cam_pos, axis=3)
+            # flatten NxCxHxW to NxHWxC
+            bs, c, h, w = src.shape
+            src = src.flatten(2).permute(0, 2, 1)
+            pos_embed = pos.flatten(2).permute(0, 2, 1).repeat(bs, 1, 1)
+        else:
+            src = torch.zeros(bs, 0, self.d_model, device = device)
+            pos_embed = torch.zeros(bs, 0, self.d_model, device = device)
 
-        # flatten NxCxHxW to NxHWxC
-        bs, c, h, w = src.shape
-        src = src.flatten(2).permute(0, 2, 1)
-        pos_embed = pos.flatten(2).permute(0, 2, 1).repeat(bs, 1, 1)
+        is_pad = torch.full(pos_embed.shape[:2], False).to(device) # False: not a padding
 
         lowdim_inputs = [
             self.nets[f"{k}_proj"].forward(
@@ -991,13 +1013,26 @@ class ObservationGroupEmbedder(Module):
             for k in self.low_dim_obs
         ]
 
-        lowdim_input = torch.stack(lowdim_inputs, axis=1)
+        # Add sequence dimension if necessary
+        lowdim_inputs = [
+            a if len(a.shape) == 3 else a.unsqueeze(1)
+            for a in lowdim_inputs
+        ]
+
+        lowdim_input = torch.cat(lowdim_inputs, axis=1)
         lowdim_pos_embed = self.low_dim_pos_embed.weight.unsqueeze(0).repeat(bs, 1, 1)
+
+        lowdim_ispad = [
+            inputs[k]["is_pad"] if k.startswith("seq:") 
+                else torch.full(lowdim_inputs[i].shape[:2], False).to(device)
+            for i,k in enumerate(self.low_dim_obs) 
+        ]
 
         src = torch.cat([lowdim_input, src], axis=1) # bs, seq, dim
         pos_embed = torch.cat([lowdim_pos_embed, pos_embed], axis=1) # bs, seq, dim
-
-        return src, pos_embed
+        is_pad = torch.cat([*lowdim_ispad, is_pad], axis=1) # bs, seq
+        
+        return src, pos_embed, is_pad
 
     def output_shape(self):
         """
@@ -1019,6 +1054,128 @@ class ObservationGroupEmbedder(Module):
             msg += textwrap.indent("group={}\n{}\n{}".format(k, self.nets[k], self.nets[k+"_proj"]), indent)
         msg = header + '(' + msg + '\n)'
         return msg
+
+def get_sinusoid_encoding_table(n_position, d_hid):
+    def get_position_angle_vec(position):
+        return [position / np.power(10000, 2 * (hid_j // 2) / d_hid) for hid_j in range(d_hid)]
+
+    sinusoid_table = np.array([get_position_angle_vec(pos_i) for pos_i in range(n_position)])
+    sinusoid_table[:, 0::2] = np.sin(sinusoid_table[:, 0::2])  # dim 2i
+    sinusoid_table[:, 1::2] = np.cos(sinusoid_table[:, 1::2])  # dim 2i+1
+
+    return torch.FloatTensor(sinusoid_table).unsqueeze(0)
+
+class MIMO_TRANSENCODER(Module):
+    """
+    Extension to Transformer Encoder to accept multiple observation dictionaries as input and 
+    to output dictionaries of tensors. Inputs are specified as a dictionary of
+    observation dictionaries, with each key corresponding to an observation group.
+
+    This module utilizes @ObservationGroupEncoder to process the multiple input dictionaries and
+    @ObservationDecoder to generate tensor dictionaries. The default behavior
+
+    This module contains only a TransformerEncoder, the output are infered with [CLS] placeholders.
+    """
+    
+    def __init__(self, 
+        input_obs_group_shapes, 
+        output_shapes,
+        d_model=512, nhead=8, 
+        num_encoder_layers=6,
+        dim_feedforward=2048, 
+        dropout=0.1, 
+        activation="relu",
+        normalize_before=False,
+        encoder_kwargs=None
+    ):
+        super(MIMO_TRANSENCODER, self).__init__()
+
+        self.observation_group_shapes = input_obs_group_shapes
+        self.output_shapes = output_shapes
+
+        # create an observation encoder per observation group
+        self.nets = nn.ModuleDict()
+
+        ## Manually create observation encoders for each observation group
+
+        self.nets["obsEncoder"] = ObservationGroupEmbedder(input_obs_group_shapes, d_model=d_model, 
+            encoder_kwargs=encoder_kwargs)
+
+        encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
+                                                dropout, activation, normalize_before)
+        encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
+        self.nets["transformerEncoder"] = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
+
+        self.query_length_presum = [0]
+        for k in output_shapes:
+            length, heads = output_shapes[k]
+            self.query_length_presum.append(self.query_length_presum[-1] + length)
+            for outhead, outheaddim in heads.items():
+                self.nets[k + "_" + outhead] = nn.Linear(d_model, outheaddim)
+
+        self.cls_embed = nn.Embedding(self.query_length_presum[-1], d_model)
+        
+        self.obs_length_presum = [0]
+        for k in input_obs_group_shapes:
+            if(k.startswith("seq:")): # keyword for sequential observation
+                length = tuple(input_obs_group_shapes[k].values())[0][0] # get the seq length of the first obs, assume all obs have the same length
+                self.obs_length_presum.append(self.obs_length_presum[-1] + length)
+            else:
+                self.obs_length_presum.append(self.obs_length_presum[-1] + 1)    
+            
+        self.register_buffer('pos_table', get_sinusoid_encoding_table(
+            self.query_length_presum[-1] + self.obs_length_presum[-1], d_model)) # [CLS], qpos, a_seq
+
+        self._reset_parameters()
+        self.d_model = d_model
+        self.nhead = nhead
+
+    def _reset_parameters(self):
+        for p in self.nets['transformerEncoder'].parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def forward(self, **inputs):
+        """
+        Process each set of inputs in its own observation group.
+
+        Args:
+            inputs (dict): a dictionary of dictionaries with one dictionary per
+                observation group. Each observation group's dictionary should map
+                modality to torch.Tensor batches. Should be consistent with
+                @self.input_obs_group_shapes.
+
+        Returns:
+            outputs (dict): dictionary of output torch.Tensors, that corresponds
+                to @self.output_shapes
+        """
+        # process each observation group
+        # TODO: use pos embed from obsEncoder
+        src, _, is_pad = self.nets["obsEncoder"](**inputs) # bs, seq, dim
+        bs, lenseq = src.shape[:2]
+
+        cls_embed = torch.unsqueeze(self.cls_embed.weight, axis=0).repeat(bs, 1, 1) # (bs, cls, d_model)
+
+        encoder_input = torch.cat([cls_embed, src], axis=1) # (bs, seq+cls, d_model)
+        encoder_input = encoder_input.permute(1, 0, 2) # (seq+cls, bs, d_model)
+
+        cls_is_pad = torch.full(cls_embed.shape[:2], False).to(cls_embed.device) # False: not a padding
+        is_pad = torch.cat([cls_is_pad, is_pad], axis=1)  # (bs, seq+cls)
+        
+        pos_embed = self.pos_table.clone().detach()
+        pos_embed = pos_embed.permute(1, 0, 2)  # (seq, 1, d_model)
+
+        hs = self.nets["transformerEncoder"](encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
+        hs = hs.permute(1, 0, 2) # (bs, seq+cls, d_model)
+
+        out = OrderedDict()
+        for i,k in enumerate(self.output_shapes):
+            length, heads = self.output_shapes[k]
+            for outhead, outheaddim in heads.items():
+                out[k + "_" + outhead] = self.nets[k + "_" + outhead](
+                    hs[:, self.query_length_presum[i]:self.query_length_presum[i+1], :]
+                )
+        return out
 
 
 class MIMO_TRANSFORMER(Module):
@@ -1131,7 +1288,7 @@ class MIMO_TRANSFORMER(Module):
                 to @self.output_shapes
         """
         # process each observation group
-        src, pos_embed = self.nets["obsEncoder"](**inputs) # bs, seq, dim
+        src, pos_embed, is_pad = self.nets["obsEncoder"](**inputs) # bs, seq, dim
         src = src.permute(1, 0, 2) # seq, bs, dim
         pos_embed = pos_embed.permute(1, 0, 2) # seq, bs, dim
 
