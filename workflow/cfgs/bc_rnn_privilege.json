@@ -47,6 +47,10 @@
             "rewards",
             "dones"
         ],
+        "action_space_normalizer": {
+            "mean": [-0.5, -1, 0, 0,   0.1, -0.1, 0.4, 0, 0.2, 0, 0],
+            "std":  [2   , 2 , 2, 1.1, 1.1, 1.0 , 1.0, 1, 0.5, 1, 8.2]
+        },
         "goal_mode": null,
         "cuda": true,
         "batch_size": 16,

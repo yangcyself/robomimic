@@ -32,6 +32,8 @@ class SequenceDataset(torch.utils.data.Dataset):
         hdf5_normalize_obs=False,
         filter_by_attribute=None,
         load_next_obs=True,
+        # Custom arg added by ycy
+        action_space_normalizer=None
     ):
         """
         Dataset class for fetching sequences of experience.
@@ -86,6 +88,7 @@ class SequenceDataset(torch.utils.data.Dataset):
         self.hdf5_use_swmr = hdf5_use_swmr
         self.hdf5_normalize_obs = hdf5_normalize_obs
         self._hdf5_file = None
+        self.action_space_normalizer = action_space_normalizer
 
         assert hdf5_cache_mode in ["all", "low_dim", None]
         self.hdf5_cache_mode = hdf5_cache_mode
@@ -468,6 +471,14 @@ class SequenceDataset(torch.utils.data.Dataset):
             if self.hdf5_normalize_obs:
                 goal = ObsUtils.normalize_obs(goal, obs_normalization_stats=self.obs_normalization_stats)
             meta["goal_obs"] = {k: goal[k][0] for k in goal}  # remove sequence dimension for goal
+
+        if(self.action_space_normalizer is not None and "actions" in meta.keys()):
+            act_mean = self.action_space_normalizer.get("mean", 0.0)
+            act_std = self.action_space_normalizer.get("std", 1.0)
+            if(type(act_mean) == list):
+                act_mean = np.array(act_mean, dtype=np.float32)
+                act_std = np.array(act_std, dtype=np.float32)
+            meta["actions"] = (meta["actions"]-act_mean)/act_std
 
         return meta
 

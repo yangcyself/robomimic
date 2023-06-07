@@ -161,6 +161,9 @@ class BaseConfig(Config):
         # of the full dataset. This provides a convenient way to train on only a subset of the trajectories in a dataset.
         self.train.hdf5_filter_key = None
 
+        # If provided, should contains the mean and std to normalize the 'actions' from the dataset
+        self.train.action_space_normalizer = None
+
         # dataset parameter: numbers of stacked frames to fetch. Defaults to 1 (single frame).
         self.train.frame_stack = 1
 
