@@ -141,7 +141,7 @@
                     "depth": [],
                     "scan": []
                 },
-                "cams": {
+                "img:cams": {
                     "low_dim": [],
                     "rgb": [
                         "agentview_image",

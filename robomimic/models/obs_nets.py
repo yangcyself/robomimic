@@ -921,55 +921,39 @@ class ObservationGroupEmbedder(Module):
         # create an observation encoder per observation group
         self.nets = nn.ModuleDict()
 
-        ## Manually create observation encoders for each observation group
-        ## TODO: 
-        # for obs_group in self.observation_group_shapes:
-        #     self.nets[obs_group] = obs_encoder_factory(
-        #         obs_shapes=self.observation_group_shapes[obs_group],
-        #         feature_activation=feature_activation,
-        #         encoder_kwargs=encoder_kwargs,
-        #     )
-
-        self.low_dim_obs = []
-        for obs_group, obs in self.observation_group_shapes.items():
-            k = list(obs.keys())[0] # Assume the group are in the same modality
-            if (ObsUtils.OBS_KEYS_TO_MODALITIES[k] == "low_dim"):
-                self.low_dim_obs.append(obs_group)
-
-        self.low_dim_obs_length = {}
-        for obs_group in self.low_dim_obs:
-            flatten_begin_axis = 2 if obs_group.startswith("seq:") else 1
-            # filter out key word "is_pad"
-            obs_shapes = OrderedDict({
-                k: v for k, v in self.observation_group_shapes[obs_group].items() 
-                if k != "is_pad"
-            })
-            self.nets[obs_group] = obs_encoder_factory(
+        self.group_pos_embeds = []
+        for obs_group in self.observation_group_shapes:
+            if obs_group.startswith("img:"):
+                backbone = build_backbone(backbone_kwargs)
+                self.nets[obs_group] = backbone
+                self.nets[f"{obs_group}_proj"] = nn.Conv2d(backbone.num_channels, d_model, kernel_size=1)
+                self.group_pos_embeds.append(None) # means pos embeds come from backbone
+            
+            elif obs_group.startswith("seq:"):
+                obs_shapes = OrderedDict({
+                    k: v for k, v in self.observation_group_shapes[obs_group].items() 
+                    if k != "is_pad"
+                })
+                self.nets[obs_group] = obs_encoder_factory(
                 obs_shapes=obs_shapes,
                 feature_activation=None,
-                flatten_begin_axis = flatten_begin_axis, # batch
-                encoder_kwargs=encoder_kwargs,
+                flatten_begin_axis = 2, # batch, seq
+                encoder_kwargs=encoder_kwargs
             )
-            self.nets[obs_group + "_proj"] = nn.Linear(self.nets[obs_group].output_shape()[-1], d_model)
-            self.low_dim_obs_length[obs_group] = tuple(obs_shapes.values())[0][0] if obs_group.startswith("seq:") else 1
-
-        ## Prepare position embedding
-        self.pos_embeds = []
-        self.nn_embeds = []
-        for obs_group in self.low_dim_obs:
-            if obs_group.startswith("seq:"):
-                self.pos_embeds.append(get_sinusoid_encoding_table(
-                    self.low_dim_obs_length[obs_group], d_model))
+                self.nets[obs_group + "_proj"] = nn.Linear(self.nets[obs_group].output_shape()[-1], d_model)
+                self.group_pos_embeds.append(get_sinusoid_encoding_table(
+                    self.nets[obs_group].output_shape()[0], d_model))
             else:
-                self.nn_embeds.append(nn.Embedding(1, d_model))  
-                self.pos_embeds.append(self.nn_embeds[-1].weight)
-        self.low_dim_pos_embed = torch.cat(self.pos_embeds, dim=0)
-
-        # TODO: Implant backbone into ObservationEncoder
-        if(backbone_kwargs is not None):
-            backbone = build_backbone(backbone_kwargs)
-            self.nets["cams"] = backbone
-            self.nets["cams_proj"] = nn.Conv2d(backbone.num_channels, d_model, kernel_size=1)
+                self.nets[obs_group] = obs_encoder_factory(
+                    obs_shapes=self.observation_group_shapes[obs_group],
+                    feature_activation=None,
+                    flatten_begin_axis = 1, # batch
+                    encoder_kwargs=encoder_kwargs,
+                )
+                self.nets[obs_group + "_proj"] = nn.Linear(self.nets[obs_group].output_shape()[-1], d_model)
+                self.group_pos_embeds.append(torch.zeros(size=(1, d_model)))
+        self.pos_embeds = nn.Embedding(len(self.group_pos_embeds), d_model)
+        
 
     def forward(self, **inputs):
         """
@@ -994,54 +978,51 @@ class ObservationGroupEmbedder(Module):
         )
         device = tuple(tuple(inputs.values())[0].values())[0].device
         bs = tuple(tuple(inputs.values())[0].values())[0].shape[0]
-        if("cams" in self.observation_group_shapes):
-            all_cam_features = []
-            all_cam_pos = []
-            for img in inputs["cams"].values():
-                features, pos = self.nets["cams"](img)
-                features = features[0] # take the last layer feature
-                pos = pos[0]
-                all_cam_features.append(self.nets["cams_proj"](features))
-                all_cam_pos.append(pos)
-            # fold camera dimension into width dimension
-            src = torch.cat(all_cam_features, axis=3)
-            pos = torch.cat(all_cam_pos, axis=3)
+        
+        src_inputs = []
+        pos_inputs = []
+        is_pad_inputs = []
+        for i,(obs_group, pos_embed) in enumerate(zip(self.observation_group_shapes, self.group_pos_embeds)):
+            if obs_group.startswith("img:"):
+                all_cam_features = []
+                all_cam_pos = []
+                for img in inputs[obs_group].values():
+                    features, pos = self.nets[obs_group](img)
+                    features = features[0] # take the last layer feature
+                    pos = pos[0]
+                    all_cam_features.append(self.nets[f"{obs_group}_proj"](features))
+                    all_cam_pos.append(pos)
+                # fold camera dimension into width dimension
+                src = torch.cat(all_cam_features, axis=3)
+                pos = torch.cat(all_cam_pos, axis=3)
 
-            # flatten NxCxHxW to NxHWxC
-            bs, c, h, w = src.shape
-            src = src.flatten(2).permute(0, 2, 1)
-            pos_embed = pos.flatten(2).permute(0, 2, 1).repeat(bs, 1, 1)
-        else:
-            src = torch.zeros(bs, 0, self.d_model, device = device)
-            pos_embed = torch.zeros(bs, 0, self.d_model, device = device)
+                # flatten NxCxHxW to NxHWxC
+                bs, c, h, w = src.shape
+                src = src.flatten(2).permute(0, 2, 1)
+                pos_embed = pos.flatten(2).permute(0, 2, 1).squeeze(0) # tokens, d_model
+                is_pad = torch.full(src.shape[:2], False, dtype=bool, device=device) # False: not a padding
+            elif obs_group.startswith("seq:"):
+                src = self.nets[f"{obs_group}_proj"].forward(
+                    self.nets[obs_group].forward(inputs[obs_group])
+                )
+                pos_embed = self.group_pos_embeds[i].to(device)  # seq, d_model
+                is_pad = inputs[obs_group]["is_pad"]
+            else:
+                src = self.nets[f"{obs_group}_proj"].forward(
+                    self.nets[obs_group].forward(inputs[obs_group])
+                ).unsqueeze(1) # 1, 1, d_model
+                pos_embed = self.group_pos_embeds[i].to(device) 
+                is_pad = torch.full(src.shape[:2], False, dtype=bool, device=device) # False: not a padding
 
-        is_pad = torch.full(pos_embed.shape[:2], False, dtype=bool).to(device) # False: not a padding
+            pos_embed = pos_embed + self.pos_embeds(torch.tensor(i, device=device)) 
+            src_inputs.append(src)
+            pos_inputs.append(pos_embed)
+            is_pad_inputs.append(is_pad)
 
-        lowdim_inputs = [
-            self.nets[f"{k}_proj"].forward(
-                self.nets[k].forward(inputs[k])
-            )
-            for k in self.low_dim_obs
-        ]
 
-        # Add sequence dimension if necessary
-        lowdim_inputs = [
-            a if len(a.shape) == 3 else a.unsqueeze(1)
-            for a in lowdim_inputs
-        ]
-
-        lowdim_input = torch.cat(lowdim_inputs, axis=1)
-        lowdim_pos_embed = self.low_dim_pos_embed.unsqueeze(0).repeat(bs, 1, 1).to(device)
-
-        lowdim_ispad = [
-            inputs[k]["is_pad"] if k.startswith("seq:") 
-                else torch.full(lowdim_inputs[i].shape[:2], False, dtype=bool).to(device)
-            for i,k in enumerate(self.low_dim_obs) 
-        ]
-
-        src = torch.cat([lowdim_input, src], axis=1) # bs, seq, dim
-        pos_embed = torch.cat([lowdim_pos_embed, pos_embed], axis=1) # bs, seq, dim
-        is_pad = torch.cat([*lowdim_ispad, is_pad], axis=1) # bs, seq
+        src = torch.cat(src_inputs, axis=1) # bs, seq, dim
+        pos_embed = torch.cat(pos_inputs, axis=0) # seq, dim
+        is_pad = torch.cat(is_pad_inputs, axis=1) # bs, seq
         
         return src, pos_embed, is_pad
 
@@ -1171,7 +1152,7 @@ class MIMO_TRANSENCODER(Module):
         cls_is_pad = torch.full(cls_embed.shape[:2], False, dtype=bool).to(cls_embed.device) # False: not a padding
         is_pad = torch.cat([cls_is_pad, is_pad], axis=1).to(dtype=bool)  # (bs, seq+cls)
         
-        pos_embed = torch.cat([torch.zeros_like(cls_embed), pos_embed], axis=1) # (bs, seq+cls, d_model)
+        pos_embed = torch.cat([torch.zeros_like(cls_embed), pos_embed.unsqueeze(0).repeat(bs,1,1)], axis=1) # (bs, seq+cls, d_model)
         pos_embed = pos_embed.permute(1, 0, 2)  # (seq, 1, d_model)
 
         hs = self.nets["transformerEncoder"](encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
@@ -1299,7 +1280,7 @@ class MIMO_TRANSFORMER(Module):
         # process each observation group
         src, pos_embed, is_pad = self.nets["obsEncoder"](**inputs) # bs, seq, dim
         src = src.permute(1, 0, 2) # seq, bs, dim
-        pos_embed = pos_embed.permute(1, 0, 2) # seq, bs, dim
+        pos_embed = pos_embed.unsqueeze(1).repeat(1, src.shape[1], 1) # seq, bs, dim
 
         memory = self.nets["transformerEncoder"](src, src_key_padding_mask=None, pos=pos_embed)
 
