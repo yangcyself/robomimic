@@ -936,6 +936,7 @@ class ObservationGroupEmbedder(Module):
             if (ObsUtils.OBS_KEYS_TO_MODALITIES[k] == "low_dim"):
                 self.low_dim_obs.append(obs_group)
 
+        self.low_dim_obs_length = {}
         for obs_group in self.low_dim_obs:
             flatten_begin_axis = 2 if obs_group.startswith("seq:") else 1
             # filter out key word "is_pad"
@@ -950,8 +951,19 @@ class ObservationGroupEmbedder(Module):
                 encoder_kwargs=encoder_kwargs,
             )
             self.nets[obs_group + "_proj"] = nn.Linear(self.nets[obs_group].output_shape()[-1], d_model)
+            self.low_dim_obs_length[obs_group] = tuple(obs_shapes.values())[0][0] if obs_group.startswith("seq:") else 1
 
-        self.low_dim_pos_embed = nn.Embedding(len(self.low_dim_obs), d_model) # learned position embedding for proprio and latent
+        ## Prepare position embedding
+        self.pos_embeds = []
+        self.nn_embeds = []
+        for obs_group in self.low_dim_obs:
+            if obs_group.startswith("seq:"):
+                self.pos_embeds.append(get_sinusoid_encoding_table(
+                    self.low_dim_obs_length[obs_group], d_model))
+            else:
+                self.nn_embeds.append(nn.Embedding(1, d_model))  
+                self.pos_embeds.append(self.nn_embeds[-1].weight)
+        self.low_dim_pos_embed = torch.cat(self.pos_embeds, dim=0)
 
         # TODO: Implant backbone into ObservationEncoder
         if(backbone_kwargs is not None):
@@ -1019,7 +1031,7 @@ class ObservationGroupEmbedder(Module):
         ]
 
         lowdim_input = torch.cat(lowdim_inputs, axis=1)
-        lowdim_pos_embed = self.low_dim_pos_embed.weight.unsqueeze(0).repeat(bs, 1, 1)
+        lowdim_pos_embed = self.low_dim_pos_embed.unsqueeze(0).repeat(bs, 1, 1).to(device)
 
         lowdim_ispad = [
             inputs[k]["is_pad"] if k.startswith("seq:") 
@@ -1062,7 +1074,7 @@ def get_sinusoid_encoding_table(n_position, d_hid):
     sinusoid_table[:, 0::2] = np.sin(sinusoid_table[:, 0::2])  # dim 2i
     sinusoid_table[:, 1::2] = np.cos(sinusoid_table[:, 1::2])  # dim 2i+1
 
-    return torch.FloatTensor(sinusoid_table).unsqueeze(0)
+    return torch.FloatTensor(sinusoid_table)
 
 class MIMO_TRANSENCODER(Module):
     """
@@ -1122,8 +1134,6 @@ class MIMO_TRANSENCODER(Module):
             else:
                 self.obs_length_presum.append(self.obs_length_presum[-1] + 1)    
             
-        self.register_buffer('pos_table', get_sinusoid_encoding_table(
-            self.query_length_presum[-1] + self.obs_length_presum[-1], d_model)) # [CLS], qpos, a_seq
 
         self._reset_parameters()
         self.d_model = d_model
@@ -1150,7 +1160,7 @@ class MIMO_TRANSENCODER(Module):
         """
         # process each observation group
         # TODO: use pos embed from obsEncoder
-        src, _, is_pad = self.nets["obsEncoder"](**inputs) # bs, seq, dim
+        src, pos_embed, is_pad = self.nets["obsEncoder"](**inputs) # bs, seq, dim
         bs, lenseq = src.shape[:2]
 
         cls_embed = torch.unsqueeze(self.cls_embed.weight, axis=0).repeat(bs, 1, 1) # (bs, cls, d_model)
@@ -1161,7 +1171,7 @@ class MIMO_TRANSENCODER(Module):
         cls_is_pad = torch.full(cls_embed.shape[:2], False, dtype=bool).to(cls_embed.device) # False: not a padding
         is_pad = torch.cat([cls_is_pad, is_pad], axis=1).to(dtype=bool)  # (bs, seq+cls)
         
-        pos_embed = self.pos_table.clone().detach()
+        pos_embed = torch.cat([torch.zeros_like(cls_embed), pos_embed], axis=1) # (bs, seq+cls, d_model)
         pos_embed = pos_embed.permute(1, 0, 2)  # (seq, 1, d_model)
 
         hs = self.nets["transformerEncoder"](encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
