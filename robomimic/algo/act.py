@@ -392,9 +392,9 @@ class ACT(ActionChunkingAlgo):
             act_mean = self.action_space_normalizer.get("mean", 0.0)
             act_std = self.action_space_normalizer.get("std", 1.0)
             if(type(act_mean) == list):
-                act_mean = torch.tensor(act_mean, dtype=torch.float32, device=self.device)
+                act_mean = torch.tensor(act_mean, dtype=torch.float32, device=action.device)
             if(type(act_std) == list):
-                act_std = torch.tensor(act_std, dtype=torch.float32, device=self.device)
+                act_std = torch.tensor(act_std, dtype=torch.float32, device=action.device)
             action = (action - act_mean)/act_std
         return action
     
@@ -403,9 +403,9 @@ class ACT(ActionChunkingAlgo):
             act_mean = self.action_space_normalizer.get("mean", 0.0)
             act_std = self.action_space_normalizer.get("std", 1.0)
             if(type(act_mean) == list):
-                act_mean = torch.tensor(act_mean, dtype=torch.float32, device=self.device)
+                act_mean = torch.tensor(act_mean, dtype=torch.float32, device=action.device)
             if(type(act_std) == list):
-                act_std = torch.tensor(act_std, dtype=torch.float32, device=self.device)
+                act_std = torch.tensor(act_std, dtype=torch.float32, device=action.device)
             action = action * act_std + act_mean
         return action
 
