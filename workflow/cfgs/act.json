@@ -42,6 +42,7 @@
         "hdf5_normalize_obs": false,
         "hdf5_filter_key": null,
         "seq_length": 100,
+        "frame_stack": 100,
         "dataset_keys": [
             "actions",
             "rewards",
@@ -51,7 +52,7 @@
         "get_pad_mask": true,
         "load_next_obs": false,
         "cuda": true,
-        "batch_size": 64,
+        "batch_size": 4,
         "num_epochs": 600,
         "seed": 1
     },
@@ -71,6 +72,7 @@
         "loss": {
             "kl_weight": 10
         },
+        "stack_size": 100,
         "chunk_size": 100,
         "latent_dim": 32,
         "backbone":{
@@ -137,8 +139,8 @@
                     "depth": [],
                     "scan": []
                 },
-                "cams": {
-                    "low_dim": [],
+                "seq:previous_act": {
+                    "low_dim": ["policy:dof_pos_normalized"],
                     "rgb": [
                         "rgb:hand_camera_rgb"
                     ],

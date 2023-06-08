@@ -73,6 +73,7 @@ def obs_encoder_factory(
                 enc_kwargs[f"{obs_module}_kwargs"] = {}
             # Add in input shape info
             enc_kwargs[f"{obs_module}_kwargs"]["input_shape"] = obs_shape
+            enc_kwargs[f"{obs_module}_kwargs"]["flatten_begin_axis"] = flatten_begin_axis
             # If group class is specified, then make sure corresponding kwargs only contain relevant kwargs
             if enc_kwargs[f"{obs_module}_class"] is not None:
                 enc_kwargs[f"{obs_module}_kwargs"] = extract_class_init_kwargs_from_dict(

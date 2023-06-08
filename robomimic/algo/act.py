@@ -1,7 +1,7 @@
 """
 Implementation of ACT: Action Chunking with Transformers
 """
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from copy import deepcopy
 
 import torch
@@ -140,13 +140,19 @@ class ACT(ActionChunkingAlgo):
                 if k in modality_obs:
                     if group not in self.encoder_obs_group_shapes:
                         self.encoder_obs_group_shapes[group] = OrderedDict()
-                    self.encoder_obs_group_shapes[group][k] = obs_key_shapes[k]
+                    if(group.startswith("seq:")):
+                        self.encoder_obs_group_shapes[group][k] = [self.algo_config.stack_size] + obs_key_shapes[k]
+                    else:
+                        self.encoder_obs_group_shapes[group][k] = obs_key_shapes[k]
             for group, modality in actor_obs_keys.items():
                 modality_obs = [v for vv in modality.values() for v in vv] # flatten
                 if k in modality_obs:
                     if group not in self.actor_obs_group_shapes:
                         self.actor_obs_group_shapes[group] = OrderedDict()
-                    self.actor_obs_group_shapes[group][k] = obs_key_shapes[k]
+                    if(group.startswith("seq:")):
+                        self.actor_obs_group_shapes[group][k] = [self.algo_config.stack_size] + obs_key_shapes[k]
+                    else:
+                        self.actor_obs_group_shapes[group][k] = obs_key_shapes[k]
         
         self.encoder_obs_group_shapes["seq:actions"] = OrderedDict(actions=[self.algo_config.chunk_size, self.ac_dim])
         self.actor_obs_group_shapes["latent"] = OrderedDict(style=[self.latent_dim])
@@ -202,11 +208,21 @@ class ACT(ActionChunkingAlgo):
         input_batch = OrderedDict()
 
         for group, modalities in self.all_obs_modalities.items():
-            input_batch[group] = OrderedDict({
-                k:batch["obs"][k][:,0,...] 
-                for kk in modalities.values()
-                for k in kk
-            })
+            if(group.startswith("seq:")):
+                input_batch[group] = OrderedDict({
+                    k:batch["obs"][k][:,:self.algo_config.stack_size,...] 
+                    for kk in modalities.values()
+                    for k in kk
+                })
+                input_batch[group]["is_pad"] = torch.full( #TODO: also return pad_mask from dataset
+                    tuple(input_batch[group].values())[0].shape[:2], False, dtype=torch.bool, device=self.device
+                )
+            else:
+                input_batch[group] = OrderedDict({
+                    k:batch["obs"][k][:,self.algo_config.stack_size-1,...] 
+                    for kk in modalities.values()
+                    for k in kk
+                })
 
         input_batch["seq:actions"] = OrderedDict(
             actions = self._pre_action(batch["actions"]), # batch_size, seq_length, 7
@@ -352,10 +368,20 @@ class ACT(ActionChunkingAlgo):
         if t % self.query_frequency == 0:
             input_batch = OrderedDict()
             for group, modalities in self.all_obs_modalities.items():
-                input_batch[group] = OrderedDict({
-                    k:obs_dict[k]
-                    for kk in modalities.values()
-                    for k in kk
+                if(group.startswith("seq:")):
+                    input_batch[group] = OrderedDict({
+                        k:self._update_stack_obs(k,obs_dict[k].unsqueeze(1))
+                        for kk in modalities.values()
+                        for k in kk
+                    })
+                    input_batch[group]["is_pad"] = torch.full( #TODO: also return pad_mask from dataset
+                        tuple(input_batch[group].values())[0].shape[:2], False, dtype=torch.bool, device=self.device
+                    )
+                else:
+                    input_batch[group] = OrderedDict({
+                        k:obs_dict[k]
+                        for kk in modalities.values()
+                        for k in kk
             })
             act_hat,_,_ = self.nets["policy"](input_batch) # no action, sample from prior
             self._all_actions = act_hat #1 num_queries x action_dim TODO: Batch this
@@ -382,11 +408,19 @@ class ACT(ActionChunkingAlgo):
         """
         self._act_counter = 0
         self._all_actions = None
+        self._stacked_obs = {k:PaddedDeque(self.algo_config.stack_size) 
+            for g, m in self.all_obs_modalities.items() if g.startswith("seq:") 
+            for kk in m.values() 
+            for k in kk}
         max_timesteps = self.algo_config.rollout.maxhorizon
         chunk_size = self.algo_config.chunk_size
         if self.algo_config.rollout.temporal_ensemble:
             self._all_time_actions = torch.zeros([max_timesteps, max_timesteps + chunk_size, self.ac_dim]).to(self.device)
 
+    def _update_stack_obs(self, k, obs):
+        self._stacked_obs[k].push(obs)
+        return self._stacked_obs[k].get_elements()
+        
     def _pre_action(self, action):
         if(self.action_space_normalizer is not None):
             act_mean = self.action_space_normalizer.get("mean", 0.0)
@@ -409,3 +443,21 @@ class ACT(ActionChunkingAlgo):
             action = action * act_std + act_mean
         return action
 
+class PaddedDeque:
+    def __init__(self, max_length):
+        self.max_length = max_length
+        self.deque = deque(maxlen=max_length)
+
+    def push(self, element):
+        self.deque.append(element)
+
+    def get_elements(self):
+        elements = list(self.deque)
+        n = len(elements)
+        
+        # pad with the first element if deque size is less than max_length
+        if n < self.max_length and n > 0:
+            first_element = elements[0]
+            padding = [first_element] * (self.max_length - n)
+            elements = padding + elements
+        return torch.cat(elements, dim=1) # batch, length, dim 

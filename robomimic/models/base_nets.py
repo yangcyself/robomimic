@@ -438,7 +438,13 @@ class ConvBase(Module):
         raise NotImplementedError
 
     def forward(self, inputs):
+        original_shape = inputs.shape
+        # Reshape to 4D if it has higher dimensions
+        if len(original_shape) > 4:
+            # Combine all dimensions except for the last 3 into the batch dimension
+            inputs = inputs.view(-1, *original_shape[-3:])
         x = self.nets(inputs)
+        x = x.view(*original_shape[:-3], *x.shape[1:])
         if list(self.output_shape(list(inputs.shape)[1:])) != list(x.shape)[1:]:
             raise ValueError('Size mismatch: expect size %s, but got size %s' % (
                 str(self.output_shape(list(inputs.shape)[1:])), str(list(x.shape)[1:]))
@@ -484,16 +490,21 @@ class ResNet18Conv(ConvBase):
 
         Args:
             input_shape (iterable of int): shape of input. Does not include batch dimension.
+                It can include the sequence dimension, in this case the input_shape len is 4
                 Some modules may not need this argument, if their output does not depend 
                 on the size of the input, or if they assume fixed size input.
 
         Returns:
             out_shape ([int]): list of integers corresponding to output shape
         """
-        assert(len(input_shape) == 3)
-        out_h = int(math.ceil(input_shape[1] / 32.))
-        out_w = int(math.ceil(input_shape[2] / 32.))
-        return [512, out_h, out_w]
+        if(len(input_shape) == 3):
+            out_h = int(math.ceil(input_shape[1] / 32.))
+            out_w = int(math.ceil(input_shape[2] / 32.))
+            return [512, out_h, out_w]
+        elif(len(input_shape) == 4):
+            out_h = int(math.ceil(input_shape[2] / 32.))
+            out_w = int(math.ceil(input_shape[3] / 32.))
+            return [input_shape[0], 512, out_h, out_w]
 
     def __repr__(self):
         """Pretty print network."""
@@ -772,8 +783,10 @@ class SpatialSoftmax(ConvBase):
             noise_std (float): add random spatial noise to the predicted keypoints
         """
         super(SpatialSoftmax, self).__init__()
-        assert len(input_shape) == 3
-        self._in_c, self._in_h, self._in_w = input_shape # (C, H, W)
+        if (len(input_shape) == 3):
+            self._in_c, self._in_h, self._in_w = input_shape # (C, H, W)
+        else:
+            self._in_s, self._in_c, self._in_h, self._in_w = input_shape # (S, C, H, W)
 
         if num_kp is not None:
             self.nets = torch.nn.Conv2d(self._in_c, num_kp, kernel_size=1)
@@ -823,9 +836,12 @@ class SpatialSoftmax(ConvBase):
         Returns:
             out_shape ([int]): list of integers corresponding to output shape
         """
-        assert(len(input_shape) == 3)
-        assert(input_shape[0] == self._in_c)
-        return [self._num_kp, 2]
+        if(len(input_shape) == 3):
+            assert(input_shape[0] == self._in_c)
+            return [self._num_kp, 2]
+        elif(len(input_shape) == 4):
+            assert(input_shape[1] == self._in_c)
+            return [input_shape[0], self._num_kp, 2]
 
     def forward(self, feature):
         """
@@ -997,6 +1013,7 @@ class VisualCore(EncoderCore, ConvBase):
     def __init__(
         self,
         input_shape,
+        flatten_begin_axis,
         backbone_class,
         backbone_kwargs,
         pool_class=None,
@@ -1006,7 +1023,7 @@ class VisualCore(EncoderCore, ConvBase):
     ):
         """
         Args:
-            input_shape (tuple): shape of input (not including batch dimension)
+            input_shape (tuple): shape of input (not including batch dimension, could include sequence dimension)
             backbone_class (str): class name for the visual backbone network (e.g.: ResNet18)
             backbone_kwargs (dict): kwargs for the visual backbone network
             pool_class (str): class name for the visual feature pooler (optional)
@@ -1017,6 +1034,9 @@ class VisualCore(EncoderCore, ConvBase):
                 project output into a desired feature dimension
         """
         super(VisualCore, self).__init__(input_shape=input_shape)
+        # In forward, I will flatten the two first dims (bs and seq) if seq exists
+        # In this way, treat encoder as normal 4-dim input
+        input_shape = input_shape[flatten_begin_axis-1:]
         self.flatten = flatten
 
         # add input channel dimension to visual core inputs
@@ -1076,18 +1096,19 @@ class VisualCore(EncoderCore, ConvBase):
         Returns:
             out_shape ([int]): list of integers corresponding to output shape
         """
+        seq_dim = [] if len(self.input_shape)==3 else [self.input_shape[0]]
         if self.feature_dimension is not None:
             # linear output
-            return [self.feature_dimension]
+            return seq_dim+[self.feature_dimension]
         feat_shape = self.backbone.output_shape(input_shape)
         if self.pool is not None:
             # pool output
             feat_shape = self.pool.output_shape(feat_shape)
         # backbone + flat output
         if self.flatten:
-            return [np.prod(feat_shape)]
+            return seq_dim+[np.prod(feat_shape)]
         else:
-            return feat_shape
+            return seq_dim+feat_shape
 
     def forward(self, inputs):
         """

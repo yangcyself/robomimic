@@ -26,6 +26,7 @@ class ACTConfig(BaseConfig):
 
         # loss weights
         self.algo.loss.kl_weight = 10.0      # L2 loss weight
+        self.algo.stack_size = 1
         self.algo.chunk_size = 100
         self.algo.latent_dim = 32
 
