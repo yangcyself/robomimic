@@ -26,10 +26,10 @@
             }
         },
         {
-            "name": "Train act liftph",
+            "name": "Train ycy liftph",
             "type": "python",
             "request": "launch",
-            "args" : ["--config", "robomimic/exps/templates/act.json", 
+            "args" : ["--config", "robomimic/exps/templates/ycy.json", 
                     "--dataset", "datasets/lift/ph/image.hdf5",
                     "--debug"
             ],

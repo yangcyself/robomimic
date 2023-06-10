@@ -1,5 +1,5 @@
 """
-Implementation of ACT: Action Chunking with Transformers
+Implementation of YCY: Haven't come up with a good name yet.
 """
 from collections import OrderedDict, deque
 from copy import deepcopy
@@ -9,23 +9,21 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import robomimic.models.base_nets as BaseNets
-import robomimic.models.obs_nets as ObsNets
-from robomimic.models.policy_nets import DETRVAEActor
+from robomimic.models.obs_nets import MIMO_TRANSENCODER, MIMO_TRANSFORM_DECODER
 
-import robomimic.models.vae_nets as VAENets
-import robomimic.utils.loss_utils as LossUtils
+
 import robomimic.utils.tensor_utils as TensorUtils
 import robomimic.utils.torch_utils as TorchUtils
 import robomimic.utils.obs_utils as ObsUtils
 
 from robomimic.algo import register_algo_factory_func, ActionChunkingAlgo
 import torchvision.transforms as transforms
+from torch.autograd import Variable
 
-
-@register_algo_factory_func("act")
+@register_algo_factory_func("ycy")
 def algo_config_to_class(algo_config):
     """
-    Maps algo config to the act algo class to instantiate, along with additional algo kwargs.
+    Maps algo config to the ycy algo class to instantiate, along with additional algo kwargs.
 
     Args:
         algo_config (Config instance): algo config
@@ -35,7 +33,7 @@ def algo_config_to_class(algo_config):
         algo_kwargs (dict): dictionary of additional kwargs to pass to algorithm
     """
 
-    return ACT, {}
+    return YCY, {}
 
 
 def kl_divergence(mu, logvar):
@@ -54,7 +52,13 @@ def kl_divergence(mu, logvar):
     return total_kld, dimension_wise_kld, mean_kld
 
 
-class ACT(ActionChunkingAlgo):
+def reparametrize(mu, logvar):
+    std = logvar.div(2).exp()
+    eps = Variable(std.data.new(std.size()).normal_())
+    return mu + std * eps
+
+
+class YCY(ActionChunkingAlgo):
     """
     Normal ACT training.
     """
@@ -131,6 +135,8 @@ class ACT(ActionChunkingAlgo):
         """
         # determine shapes
         self.actor_obs_group_shapes = OrderedDict()
+        # We keep the "seq:" at the end of the OrderedDict
+        self.actor_obs_group_shapes["latent"] = OrderedDict(style=[self.latent_dim])
         self.encoder_obs_group_shapes = OrderedDict()
         # We check across all modalitie specified in the config. store its corresponding shape internally
         for k in obs_key_shapes:
@@ -140,7 +146,7 @@ class ACT(ActionChunkingAlgo):
                     if group not in self.encoder_obs_group_shapes:
                         self.encoder_obs_group_shapes[group] = OrderedDict()
                     if(group.startswith("seq:")):
-                        self.encoder_obs_group_shapes[group][k] = [self.algo_config.stack_size] + obs_key_shapes[k]
+                        self.encoder_obs_group_shapes[group][k] = [-self.algo_config.max_len] + obs_key_shapes[k]
                     else:
                         self.encoder_obs_group_shapes[group][k] = obs_key_shapes[k]
             for group, modality in actor_obs_keys.items():
@@ -149,12 +155,11 @@ class ACT(ActionChunkingAlgo):
                     if group not in self.actor_obs_group_shapes:
                         self.actor_obs_group_shapes[group] = OrderedDict()
                     if(group.startswith("seq:")):
-                        self.actor_obs_group_shapes[group][k] = [self.algo_config.stack_size] + obs_key_shapes[k]
+                        self.actor_obs_group_shapes[group][k] = [-self.algo_config.max_len] + obs_key_shapes[k]
                     else:
                         self.actor_obs_group_shapes[group][k] = obs_key_shapes[k]
         
-        self.encoder_obs_group_shapes["seq:actions"] = OrderedDict(actions=[self.algo_config.chunk_size, self.ac_dim])
-        self.actor_obs_group_shapes["latent"] = OrderedDict(style=[self.latent_dim])
+        self.encoder_obs_group_shapes["seq:actions"] = OrderedDict(actions=[-self.algo_config.max_len, self.ac_dim])
 
         self.all_obs_modalities = deepcopy(self.obs_config.action_encoder.modalities)
         self.all_obs_modalities.update(self.obs_config.actor.modalities)
@@ -167,26 +172,34 @@ class ACT(ActionChunkingAlgo):
 
         self.nets = nn.ModuleDict()
 
-        # From state
-        # backbone = None # from state for now, no need for conv nets
-        # From image
-        # encoder = build_encoder(self.algo_config.encoder)
-        model = DETRVAEActor(
-            self.encoder_obs_group_shapes,
-            self.actor_obs_group_shapes,
-            latent_dim = self.latent_dim,
-            action_dim = self.ac_dim,
-            num_queries=self.algo_config.chunk_size,
-            encoder_kwargs=self.algo_config.encoder,
-            transformer_kwargs=self.algo_config.transformer,
-            backbone_kwargs=self.algo_config.backbone,
-            obs_encoder_kwargs=self.obs_config.actor.encoder
+        encoder = MIMO_TRANSENCODER(
+            input_obs_group_shapes = self.encoder_obs_group_shapes,
+            output_shapes = OrderedDict(
+                latent = (1, OrderedDict(
+                    info = self.latent_dim*2
+                )),
+            ),
+            **self.algo_config.encoder,
+            encoder_kwargs=self.obs_config.actor.encoder
         )
 
-        n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        decoder = MIMO_TRANSFORM_DECODER(
+            input_obs_group_shapes = self.actor_obs_group_shapes,
+            output_shapes = OrderedDict(
+                hat = (-1, OrderedDict(
+                    action = self.ac_dim,
+                    is_pad = 1
+                )),
+            ),
+            **self.algo_config.transformer,
+            encoder_kwargs=self.obs_config.actor.encoder
+        )
+
+        n_parameters = sum(p.numel() for model in [encoder, decoder] for p in model.parameters() if p.requires_grad)
         print("number of parameters: %.2fM" % (n_parameters/1e6,))
 
-        self.nets["policy"] = model # CVAE decoder
+        self.nets["encoder"] = encoder
+        self.nets["decoder"] = decoder # CVAE decoder
         self.nets = self.nets.to(self.device)
         self.imgnormalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                     std=[0.229, 0.224, 0.225])
@@ -209,7 +222,7 @@ class ACT(ActionChunkingAlgo):
         for group, modalities in self.all_obs_modalities.items():
             if(group.startswith("seq:")):
                 input_batch[group] = OrderedDict({
-                    k:batch["obs"][k][:,:self.algo_config.stack_size,...] 
+                    k:batch["obs"][k][:,:,...] 
                     for kk in modalities.values()
                     for k in kk
                 })
@@ -218,7 +231,7 @@ class ACT(ActionChunkingAlgo):
                 )
             else:
                 input_batch[group] = OrderedDict({
-                    k:batch["obs"][k][:,self.algo_config.stack_size-1,...] 
+                    k:batch["obs"][k][:,0,...] 
                     for kk in modalities.values()
                     for k in kk
                 })
@@ -247,7 +260,7 @@ class ACT(ActionChunkingAlgo):
                 that might be relevant for logging
         """
         with TorchUtils.maybe_no_grad(no_grad=validate):
-            info = super(ACT, self).train_on_batch(batch, epoch, validate=validate)
+            info = super(YCY, self).train_on_batch(batch, epoch, validate=validate)
             predictions = self._forward_training(batch)
             losses = self._compute_losses(predictions, batch)
 
@@ -272,13 +285,21 @@ class ACT(ActionChunkingAlgo):
             predictions (dict): dictionary containing network outputs
         """
 
-        a_hat, is_pad_hat, (mu, logvar) = self.nets["policy"](batch, True)
-        predictions = OrderedDict(
-            a_hat=a_hat,
-            is_pad_hat=is_pad_hat,
-            mu=mu,
-            logvar=logvar,
-        )
+
+        # project action sequence to embedding dim, and concat with a CLS token
+        # query model
+        encoder_output = self.nets["encoder"](**batch)
+        latent_info = encoder_output["latent_info"]
+        mu = latent_info[:, :, :self.latent_dim].squeeze(1)
+        logvar = latent_info[:, :, self.latent_dim:].squeeze(1)
+        latent_sample = reparametrize(mu, logvar)
+
+        decoder_input = batch
+        decoder_input["latent"] = OrderedDict(style=latent_sample)
+        predictions = self.nets["decoder"](**decoder_input)
+        predictions["mu"] = mu
+        predictions["logvar"] = logvar
+
         return predictions
 
     def _compute_losses(self, predictions, batch):
@@ -298,12 +319,11 @@ class ACT(ActionChunkingAlgo):
         total_kld, dim_wise_kld, mean_kld = kl_divergence(predictions["mu"], predictions["logvar"])
 
         actions = batch["seq:actions"]["actions"]
-        actions = actions[:, :self.nets["policy"].num_queries]
         is_pad = batch["seq:actions"]["is_pad"].to(dtype=torch.bool)
-        is_pad = is_pad[:, :self.nets["policy"].num_queries]
-
+        # Assume a_hat is at the last of the sequence from the decoder prediction
+        a_hat = predictions["hat_action"][...,-actions.shape[-2]:,:]
         loss_dict = dict()
-        all_l1 = F.l1_loss(actions, predictions['a_hat'], reduction='none')
+        all_l1 = F.l1_loss(actions, a_hat, reduction='none')
         l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
         loss_dict['l1'] = l1
         loss_dict['kl'] = total_kld[0]
@@ -321,12 +341,25 @@ class ACT(ActionChunkingAlgo):
 
         # gradient step
         info = OrderedDict()
-        policy_grad_norms = TorchUtils.backprop_for_loss(
-            net=self.nets["policy"],
-            optim=self.optimizers["policy"],
-            loss=losses["loss"],
-        )
-        info["policy_grad_norms"] = policy_grad_norms
+        # TODO Change to use backprop_for_loss
+        self.optimizers["encoder"].zero_grad()
+        self.optimizers["decoder"].zero_grad()
+        losses["loss"].backward()
+        encoder_grad_norms = 0.
+        for p in self.nets["encoder"].parameters():
+            # only clip gradients for parameters for which requires_grad is True
+            if p.grad is not None:
+                encoder_grad_norms += p.grad.data.norm(2).pow(2).item()
+        decoder_grad_norms = 0.
+        for p in self.nets["decoder"].parameters():
+            # only clip gradients for parameters for which requires_grad is True
+            if p.grad is not None:
+                decoder_grad_norms += p.grad.data.norm(2).pow(2).item()
+
+        self.optimizers["encoder"].step()
+        self.optimizers["decoder"].step()
+        info["encoder_grad_norms"] = encoder_grad_norms
+        info["decoder_grad_norms"] = decoder_grad_norms
         return info
 
     def log_info(self, info):
@@ -340,7 +373,7 @@ class ACT(ActionChunkingAlgo):
         Returns:
             loss_log (dict): name -> summary statistic
         """
-        log = super(ACT, self).log_info(info)
+        log = super(YCY, self).log_info(info)
         log["Loss"] = info["losses"]["loss"].item()
         if "l1" in info["losses"]:
             log["l1"] = info["losses"]["l1"].item()
@@ -349,6 +382,7 @@ class ACT(ActionChunkingAlgo):
         if "policy_grad_norms" in info:
             log["Policy_Grad_Norms"] = info["policy_grad_norms"]
         return log
+
 
     def get_action(self, obs_dict, goal_dict=None):
         """
@@ -362,59 +396,38 @@ class ACT(ActionChunkingAlgo):
             action (torch.Tensor): action tensor
         """
         assert not self.nets.training
-        t = self._act_counter # A short hand
-
-        if t % self.query_frequency == 0:
-            input_batch = OrderedDict()
-            for group, modalities in self.all_obs_modalities.items():
-                if(group.startswith("seq:")):
-                    input_batch[group] = OrderedDict({
-                        k:self._update_stack_obs(k,obs_dict[k].unsqueeze(1))
-                        for kk in modalities.values()
-                        for k in kk
-                    })
-                    input_batch[group]["is_pad"] = torch.full( #TODO: also return pad_mask from dataset
-                        tuple(input_batch[group].values())[0].shape[:2], False, dtype=torch.bool, device=self.device
-                    )
-                else:
-                    input_batch[group] = OrderedDict({
-                        k:obs_dict[k]
-                        for kk in modalities.values()
-                        for k in kk
+        input_batch = {}
+        for group, modalities in self.obs_config.actor.modalities.items():
+            input_batch[group] = OrderedDict({
+                k:obs_dict[k].unsqueeze(1)
+                for kk in modalities.values()
+                for k in kk
             })
-            act_hat,_,_ = self.nets["policy"](input_batch) # no action, sample from prior
-            self._all_actions = act_hat #1 num_queries x action_dim TODO: Batch this
-        if self.algo_config.rollout.temporal_ensemble:
-            self._all_time_actions[[t], t:t+self.algo_config.chunk_size] = self._all_actions
-            actions_for_curr_step = self._all_time_actions[:, t]
-            actions_populated = torch.all(actions_for_curr_step != 0, axis=1)
-            actions_for_curr_step = actions_for_curr_step[actions_populated]
-            k = 0.01
-            exp_weights = torch.exp(-k * torch.arange(len(actions_for_curr_step))).to(self.device).unsqueeze(dim=1)
-            exp_weights = exp_weights / exp_weights.sum()
-            raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
-        else:
-            raw_action = self._all_actions[:, t % self.query_frequency]
-
-        self._act_counter += 1
-        
-        return self._post_action(raw_action )
+            if len(input_batch[group])==0:
+                continue
+            input_batch[group]["is_pad"] = torch.full(
+                tuple(input_batch[group].values())[0].shape[:2], False, dtype=torch.bool, device=self.device
+            )
+        predictions = self.nets["decoder"](seq_step = self._step_count, incremental_state = self._incremental_state, **input_batch)
+        action = predictions["hat_action"][:,-1,:]
+        self._step_count += 1
+        return self._post_action(action)
 
 
     def reset(self):
         """
         Reset algo state to prepare for environment rollouts.
         """
-        self._act_counter = 0
-        self._all_actions = None
-        self._stacked_obs = {k:PaddedDeque(self.algo_config.stack_size) 
-            for g, m in self.all_obs_modalities.items() if g.startswith("seq:") 
-            for kk in m.values() 
-            for k in kk}
-        max_timesteps = self.algo_config.rollout.maxhorizon
-        chunk_size = self.algo_config.chunk_size
-        if self.algo_config.rollout.temporal_ensemble:
-            self._all_time_actions = torch.zeros([max_timesteps, max_timesteps + chunk_size, self.ac_dim]).to(self.device)
+        self._incremental_state = {}
+        self._step_count = 0
+        ## forward in the decoder to push the zero latent first
+        self.nets["decoder"](
+            incremental_state=self._incremental_state,
+            latent=OrderedDict(
+                style=torch.zeros(1, 1, self.latent_dim, device=self.device)
+            )
+        )
+
 
     def _update_stack_obs(self, k, obs):
         self._stacked_obs[k].push(obs)
@@ -442,21 +455,3 @@ class ACT(ActionChunkingAlgo):
             action = action * act_std + act_mean
         return action
 
-class PaddedDeque:
-    def __init__(self, max_length):
-        self.max_length = max_length
-        self.deque = deque(maxlen=max_length)
-
-    def push(self, element):
-        self.deque.append(element)
-
-    def get_elements(self):
-        elements = list(self.deque)
-        n = len(elements)
-        
-        # pad with the first element if deque size is less than max_length
-        if n < self.max_length and n > 0:
-            first_element = elements[0]
-            padding = [first_element] * (self.max_length - n)
-            elements = padding + elements
-        return torch.cat(elements, dim=1) # batch, length, dim 

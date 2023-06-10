@@ -445,7 +445,12 @@ class ConvBase(Module):
             inputs = inputs.view(-1, *original_shape[-3:])
         x = self.nets(inputs)
         x = x.view(*original_shape[:-3], *x.shape[1:])
-        if list(self.output_shape(list(inputs.shape)[1:])) != list(x.shape)[1:]:
+        expected_output_shape = self.output_shape(list(inputs.shape)[1:])
+        if(list(expected_output_shape)[0]<0):
+            match_shape = list(expected_output_shape)[1:] == list(x.shape)[2:]
+        else:
+            match_shape = list(expected_output_shape) == list(x.shape)[1:]
+        if not match_shape:
             raise ValueError('Size mismatch: expect size %s, but got size %s' % (
                 str(self.output_shape(list(inputs.shape)[1:])), str(list(x.shape)[1:]))
             )
@@ -1115,7 +1120,11 @@ class VisualCore(EncoderCore, ConvBase):
         Forward pass through visual core.
         """
         ndim = len(self.input_shape)
-        assert tuple(inputs.shape)[-ndim:] == tuple(self.input_shape)
+        if self.input_shape[0]<0:
+            # the seq lentgh is variable
+            assert tuple(inputs.shape)[-ndim+1:] == tuple(self.input_shape[1:])
+        else:
+            assert tuple(inputs.shape)[-ndim:] == tuple(self.input_shape)
         return super(VisualCore, self).forward(inputs)
 
     def __repr__(self):

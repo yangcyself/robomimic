@@ -922,15 +922,16 @@ class ObservationGroupEmbedder(Module):
         # create an observation encoder per observation group
         self.nets = nn.ModuleDict()
 
-        self.group_pos_embeds = []
-        for obs_group in self.observation_group_shapes:
+        self.group_pos_embeds = {}
+        for i,obs_group in enumerate(self.observation_group_shapes):
             if obs_group.startswith("img:"):
                 backbone = build_backbone(backbone_kwargs)
                 self.nets[obs_group] = backbone
                 self.nets[f"{obs_group}_proj"] = nn.Conv2d(backbone.num_channels, d_model, kernel_size=1)
-                self.group_pos_embeds.append(None) # means pos embeds come from backbone
+                self.group_pos_embeds[obs_group] = (i, None) # means pos embeds come from backbone
             
             elif obs_group.startswith("seq:"):
+                # Trick: the seq length can be negative. Which means the maximum length of the sequence.
                 obs_shapes = OrderedDict({
                     k: v for k, v in self.observation_group_shapes[obs_group].items() 
                     if k != "is_pad"
@@ -942,8 +943,8 @@ class ObservationGroupEmbedder(Module):
                 encoder_kwargs=encoder_kwargs
             )
                 self.nets[obs_group + "_proj"] = nn.Linear(self.nets[obs_group].output_shape()[-1], d_model)
-                self.group_pos_embeds.append(get_sinusoid_encoding_table(
-                    self.nets[obs_group].output_shape()[0], d_model))
+                self.group_pos_embeds[obs_group] = (i, get_sinusoid_encoding_table(
+                    abs(self.nets[obs_group].output_shape()[0]), d_model))
             else:
                 self.nets[obs_group] = obs_encoder_factory(
                     obs_shapes=self.observation_group_shapes[obs_group],
@@ -952,11 +953,11 @@ class ObservationGroupEmbedder(Module):
                     encoder_kwargs=encoder_kwargs,
                 )
                 self.nets[obs_group + "_proj"] = nn.Linear(self.nets[obs_group].output_shape()[-1], d_model)
-                self.group_pos_embeds.append(torch.zeros(size=(1, d_model)))
+                self.group_pos_embeds[obs_group] = (i, torch.zeros(size=(1, d_model)))
         self.pos_embeds = nn.Embedding(len(self.group_pos_embeds), d_model)
         
 
-    def forward(self, **inputs):
+    def forward(self,  obs_seq_starts=None, **inputs):
         """
         Process each set of inputs in its own observation group.
 
@@ -968,14 +969,18 @@ class ObservationGroupEmbedder(Module):
                 observation groups can also be present. Note that these are specified
                 as kwargs for ease of use with networks that name each observation
                 stream in their forward calls.
-
+            obs_seq_starts (dict): list of observation groups to process. If None, all in self.observation_group_shapes
+                are processed.
+                This is used for incremental decoding, where we only want to process the new ones.
         Returns:
             outputs (torch.Tensor): flat outputs of shape [B, D]
         """
 
         # ensure all observation groups we need are present
-        assert set(self.observation_group_shapes.keys()).issubset(inputs), "{} does not contain all observation groups {}".format(
-            list(inputs.keys()), list(self.observation_group_shapes.keys())
+        obs_seq_starts = obs_seq_starts if obs_seq_starts is not None \
+                else OrderedDict({k:0 for k in list(self.observation_group_shapes.keys())})
+        assert set(obs_seq_starts).issubset(inputs), "{} does not contain all observation groups {}".format(
+            list(inputs.keys()), list(obs_seq_starts)
         )
         device = tuple(tuple(inputs.values())[0].values())[0].device
         bs = tuple(tuple(inputs.values())[0].values())[0].shape[0]
@@ -983,7 +988,7 @@ class ObservationGroupEmbedder(Module):
         src_inputs = []
         pos_inputs = []
         is_pad_inputs = []
-        for i,(obs_group, pos_embed) in enumerate(zip(self.observation_group_shapes, self.group_pos_embeds)):
+        for obs_group, pos_embed in zip(obs_seq_starts, self.group_pos_embeds):
             if obs_group.startswith("img:"):
                 all_cam_features = []
                 all_cam_pos = []
@@ -999,27 +1004,28 @@ class ObservationGroupEmbedder(Module):
 
                 # flatten NxCxHxW to NxHWxC
                 bs, c, h, w = src.shape
-                src = src.flatten(2).permute(0, 2, 1)
+                src = src.flatten(2).permute(0, 2, 1)                  # bs, tockens, d_model
                 pos_embed = pos.flatten(2).permute(0, 2, 1).squeeze(0) # tokens, d_model
                 is_pad = torch.full(src.shape[:2], False, dtype=bool, device=device) # False: not a padding
             elif obs_group.startswith("seq:"):
                 src = self.nets[f"{obs_group}_proj"].forward(
                     self.nets[obs_group].forward(inputs[obs_group])
                 )
-                pos_embed = self.group_pos_embeds[i].to(device)  # seq, d_model
+                pos_embed = self.group_pos_embeds[obs_group][1].to(device)  # seq, d_model
                 is_pad = inputs[obs_group]["is_pad"]
             else:
                 src = self.nets[f"{obs_group}_proj"].forward(
                     self.nets[obs_group].forward(inputs[obs_group])
                 ).unsqueeze(1) # 1, 1, d_model
-                pos_embed = self.group_pos_embeds[i].to(device) 
+                pos_embed = self.group_pos_embeds[obs_group][1].to(device) 
                 is_pad = torch.full(src.shape[:2], False, dtype=bool, device=device) # False: not a padding
 
-            pos_embed = pos_embed + self.pos_embeds(torch.tensor(i, device=device)) 
+            pos_start = obs_seq_starts[obs_group]
+            pos_embed = pos_embed[pos_start:pos_start+src.shape[1],...] \
+                + self.pos_embeds(torch.tensor(self.group_pos_embeds[obs_group][0], device=device)) 
             src_inputs.append(src)
             pos_inputs.append(pos_embed)
             is_pad_inputs.append(is_pad)
-
 
         src = torch.cat(src_inputs, axis=1) # bs, seq, dim
         pos_embed = torch.cat(pos_inputs, axis=0) # seq, dim
@@ -1331,3 +1337,89 @@ class MIMO_TRANSFORMER(Module):
         msg = header + '(' + msg + '\n)'
         return msg
 
+class MIMO_TRANSFORM_DECODER(Module):
+
+    """ This is the the transformer decoder module that generates actions.
+        At the inference time, it generates actions one at a time. 
+        Concatenate new observations to generate the next one.
+        The k,v values can be cached in this generation process.
+        Currently, it only supports one "seq:" modality with several modalities projected into single token.
+        Another important property is that it forces causal attention.
+    """
+    def __init__(self, 
+        input_obs_group_shapes, 
+        output_shapes,
+        d_model=512, nhead=8, 
+        num_encoder_layers=6,
+        num_decoder_layers=6, 
+        dim_feedforward=2048, 
+        dropout=0.1,
+        activation="relu", 
+        normalize_before=False,
+        backbone_kwargs=None,
+        encoder_kwargs=None):
+
+        super().__init__()
+        self.d_model = d_model
+        self.nhead = nhead
+        self.output_shapes = output_shapes
+        # encoder extra parameters
+        assert list(input_obs_group_shapes)[-1].startswith("seq:"), "the last one on obs_group should be of type seq"
+
+        self.nets = nn.ModuleDict()
+        self.nets["obsEncoder"] = ObservationGroupEmbedder(
+            input_obs_group_shapes, 
+            d_model=d_model, 
+            encoder_kwargs=encoder_kwargs
+        )
+
+        decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
+                                                dropout, activation, normalize_before)
+        decoder_norm = nn.LayerNorm(d_model)
+        self.nets["transformerDecoder"] = TransformerDecoder(decoder_layer, num_decoder_layers, decoder_norm,
+                                          return_intermediate=False)
+
+        assert len(output_shapes) == 1, "Currently, only support one output"
+        for k in output_shapes:
+            length, heads = output_shapes[k]
+            assert length == -1, "Currently, Assume output length is the same length as hte seq: input"
+            for outhead, outheaddim in heads.items():
+                self.nets[k + "_" + outhead] = nn.Linear(d_model, outheaddim)
+
+    def forward(self, incremental_state=None, seq_step = 0, **inputs):
+        """
+        qpos: batch, qpos_dim
+        image: batch, num_cam, channel, height, width
+        actions: batch, seq, action_dim
+        """
+        # process each observation group
+        if incremental_state is None:
+            obs_seq_starts = None # all keys
+        else:
+            obs_seq_starts = {
+                k:seq_step if k.startswith("seq:") else 0
+                for k in self.nets["obsEncoder"].observation_group_shapes 
+                if k in inputs.keys()
+            }
+        src, pos_embed, is_pad = self.nets["obsEncoder"](obs_seq_starts = obs_seq_starts, **inputs) # bs, seq, dim
+        src = src.permute(1, 0, 2) # seq, bs, dim
+        pos_embed = pos_embed.unsqueeze(1).repeat(1, src.shape[1], 1) # seq, bs, dim
+
+        attn_mask = self.future_mask(src)
+        hs = self.nets["transformerDecoder"](src, tgt_mask = attn_mask, tgt_key_padding_mask = is_pad,
+                        memory=None, memory_mask=None, memory_key_padding_mask=None, # no memory from encoder
+                        pos=None, query_pos=pos_embed, incremental_state=incremental_state) # layerstack, seq, bs, dim
+
+        hs = hs.transpose(1, 2)[0] # bs, seq, dim
+        out = OrderedDict()
+        for i,k in enumerate(self.output_shapes):
+            _, heads = self.output_shapes[k]
+            for outhead, outheaddim in heads.items():
+                out[k + "_" + outhead] = self.nets[k + "_" + outhead](hs)
+        return out
+
+    def future_mask(self, tensor):
+        dim = tensor.size(0)
+        future_mask = torch.triu(torch.zeros([dim,dim]).fill_(float("-inf")),1)
+        future_mask = future_mask.to(tensor)
+        return future_mask

@@ -252,7 +252,7 @@ def initialize_obs_utils_with_config(config):
             config.observation.actor.modalities,
         ]
         obs_encoder_config = config.observation.actor.encoder
-    elif config.algo_name == "act":
+    elif config.algo_name in ["act", "ycy"]:
         obs_modality_specs = [
             config.observation.action_encoder.modalities, 
             config.observation.actor.modalities,
